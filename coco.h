@@ -87,56 +87,53 @@ struct state_t {
 };
 
 class co_t {
-public:
+  public:
     enum ret_t {
         START,
         YIELD,
         DONE,
     };
-    typedef std::function<ret_t(co_t*, state_t*)> fn_t;
-private:
-    state_t* st;
+    typedef std::function<ret_t(co_t *, state_t *)> fn_t;
+
+  private:
+    state_t *st;
     fn_t fn;
-public:
-	ret_t ret = START;
-    co_t(fn_t const& fn, state_t* st = new state_t) : st(st), fn(fn) {}
-	bool done() { return ret == DONE; }
+
+  public:
+    ret_t ret = START;
+    co_t(fn_t const &fn, state_t *st = new state_t) : st(st), fn(fn) {}
+    bool done() { return ret == DONE; }
     ret_t resume() {
-		if (done()) return DONE;
+        if (done())
+            return DONE;
         ret = fn(this, st);
         return ret;
     }
-    ~co_t() {
-        delete st;
-    }
+    ~co_t() { delete st; }
 };
 
-co_t* go(co_t::fn_t const& fn, state_t* st = new state_t) {
+co_t *go(co_t::fn_t const &fn, state_t *st = new state_t) {
     auto co = new co_t(fn, st);
     co->resume();
     return co;
 }
 
-template <typename T>
-class chan_t {
-    typedef std::function<void (T)> close_fn_t;
+template <typename T> class chan_t {
+    typedef std::function<void(T)> close_fn_t;
     size_t cap = 1;
     std::queue<T> data;
-    std::queue<co_t*> rq;
-    std::queue<co_t*> wq;
+    std::queue<co_t *> rq;
+    std::queue<co_t *> wq;
     bool closed_ = false;
-public:
+
+  public:
     chan_t(int cap = 0) : cap(cap) {}
 
-    bool ready() {
-        return !data.empty();
-    }
+    bool ready() { return !data.empty(); }
 
-    bool closed() {
-        return closed_;
-    }
+    bool closed() { return closed_; }
 
-    bool get(co_t* co, T& t) {
+    bool get(co_t *co, T &t) {
         if (closed())
             return true;
 
@@ -155,7 +152,7 @@ public:
         return false;
     }
 
-    bool put(co_t* co, T t) {
+    bool put(co_t *co, T t) {
         if (closed())
             return true;
 
@@ -200,10 +197,9 @@ public:
 class wait_group_t {
     co_t *waiter = nullptr;
     int cnt = 0;
-public:
-    void add(int delta) {
-        cnt += delta;
-    }
+
+  public:
+    void add(int delta) { cnt += delta; }
     void done() {
         cnt--;
         if (cnt == 0 && waiter) {
@@ -219,4 +215,4 @@ public:
         return false;
     }
 };
-}
+} // namespace coco
