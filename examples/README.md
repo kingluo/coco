@@ -20,7 +20,7 @@ g++ -I. -O2 -Wall -Wextra -Werror examples/channel_and_waitgroup.cpp && ./a.out
 
 ### webserver
 
-Transform the webserver [example](https://unixism.net/loti/tutorial/webserver_liburing.html) into coroutines.
+Transform the io_uring webserver [example](https://unixism.net/loti/tutorial/webserver_liburing.html) into coroutines.
 
 ```bash
 $ g++ -I. -ggdb -O2 -Wall -Wextra -Werror examples/webserver.cpp -luring -o examples/webserver && (cd examples/ && ./webserver)
