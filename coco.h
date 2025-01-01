@@ -27,67 +27,70 @@
 #include <queue>
 #include <string>
 
-#define COCO_ASYNC_BEGIN(tag) \
-{ \
-auto __tag = #tag; \
-auto __it = _st->state.find(__tag); \
-auto __st = (__it == _st->state.end()) ? -1 : __it->second; \
-switch (__st) { \
-case -1: { \
-(void)1;
+#define COCO_ASYNC_BEGIN(tag)                                       \
+    {                                                               \
+        auto __tag = #tag;                                          \
+        auto __it = _st->state.find(__tag);                         \
+        auto __st = (__it == _st->state.end()) ? -1 : __it->second; \
+        switch (__st) {                                             \
+        case -1: {                                                  \
+            (void)1;
 
-#define COCO_ASYNC_END() \
-} break; default: break; \
-}; \
-_st->state[__tag] = -1; \
-} \
-(void) 1;
+#define COCO_ASYNC_END()        \
+    }                           \
+    break;                      \
+    default:                    \
+        break;                  \
+        }                       \
+        ;                       \
+        _st->state[__tag] = -1; \
+        }
 
-#define COCO_DONE() \
-return co_t::DONE;
+#define COCO_DONE() return co_t::DONE;
 
-#define COCO_YIELD() \
-_st->state[__tag] = __LINE__;\
-return co_t::YIELD; \
-break; \
-} \
-case __LINE__: {\
-(void) 1;
+#define COCO_YIELD()              \
+    _st->state[__tag] = __LINE__; \
+    return co_t::YIELD;           \
+    break;                        \
+    }                             \
+    case __LINE__: {              \
+        (void)1;
 
-#define COCO_CHAN_OP_(op, tag, ch, t) \
-    __##tag##__1: \
-    if (ch->op(__self, t)) { \
-        goto __##tag##__2; \
-    } \
-    COCO_YIELD() \
-    goto __##tag##__1; \
-    __##tag##__2: \
-    (void)1;
+#define COCO_TOKEN_(x, y) x##y
+#define COCO_TOKEN(x, y) COCO_TOKEN_(x, y)
 
-#define COCO_WRITE_CHAN(tag, ch, t) \
-    COCO_CHAN_OP_(put, tag, ch, t)
+#define COCO_CHAN_OP_(op, ch, t)                        \
+    COCO_TOKEN(tag1, __LINE__) : if (ch->op(__self, t)) \
+    {                                                   \
+        goto COCO_TOKEN(tag2, __LINE__);                \
+    }                                                   \
+    COCO_YIELD()                                        \
+    goto COCO_TOKEN(tag1, __LINE__);                    \
+    COCO_TOKEN(tag2, __LINE__) : (void)1;
 
-#define COCO_READ_CHAN(tag, ch, t) \
-    COCO_CHAN_OP_(get, tag, ch, t)
+#define COCO_WRITE_CHAN(ch, t) COCO_CHAN_OP_(put, ch, t)
 
-#define COCO_WAIT(tag, wg) \
-    __##tag##__1: \
-    if (wg->wait(__self)) { \
-        goto __##tag##__2; \
-    } \
-    COCO_YIELD() \
-    goto __##tag##__1; \
-    __##tag##__2: \
-    (void)1;
+#define COCO_READ_CHAN(ch, t) COCO_CHAN_OP_(get, ch, t)
 
-namespace coco {
+#define COCO_WAIT(wg)                                  \
+    COCO_TOKEN(tag1, __LINE__) : if (wg->wait(__self)) \
+    {                                                  \
+        goto COCO_TOKEN(tag2, __LINE__);               \
+    }                                                  \
+    COCO_YIELD()                                       \
+    goto COCO_TOKEN(tag1, __LINE__);                   \
+    COCO_TOKEN(tag2, __LINE__) : (void)1;
+
+namespace coco
+{
 struct state_t {
     std::map<std::string, int> state;
     virtual ~state_t() {}
 };
 
-class co_t {
-  public:
+class co_t
+{
+public:
     enum ret_t {
         START,
         YIELD,
@@ -95,15 +98,16 @@ class co_t {
     };
     typedef std::function<ret_t(co_t *, state_t *)> fn_t;
 
-  private:
+private:
     state_t *st;
     fn_t fn;
 
-  public:
+public:
     ret_t ret = START;
     co_t(fn_t const &fn, state_t *st = new state_t) : st(st), fn(fn) {}
     bool done() { return ret == DONE; }
-    ret_t resume() {
+    ret_t resume()
+    {
         if (done())
             return DONE;
         ret = fn(this, st);
@@ -112,13 +116,15 @@ class co_t {
     ~co_t() { delete st; }
 };
 
-co_t *go(co_t::fn_t const &fn, state_t *st = new state_t) {
+inline co_t *go(co_t::fn_t const &fn, state_t *st = new state_t)
+{
     auto co = new co_t(fn, st);
     co->resume();
     return co;
 }
 
-template <typename T> class chan_t {
+template <typename T> class chan_t
+{
     typedef std::function<void(T)> close_fn_t;
     size_t cap = 1;
     std::queue<T> data;
@@ -126,14 +132,15 @@ template <typename T> class chan_t {
     std::queue<co_t *> wq;
     bool closed_ = false;
 
-  public:
+public:
     chan_t(int cap = 0) : cap(cap) {}
 
     bool ready() { return !data.empty(); }
 
     bool closed() { return closed_; }
 
-    bool get(co_t *co, T &t) {
+    bool get(co_t *co, T &t)
+    {
         if (closed())
             return true;
 
@@ -152,7 +159,8 @@ template <typename T> class chan_t {
         return false;
     }
 
-    bool put(co_t *co, T t) {
+    bool put(co_t *co, T t)
+    {
         if (closed())
             return true;
 
@@ -173,7 +181,8 @@ template <typename T> class chan_t {
         return true;
     }
 
-    void close(close_fn_t fn = nullptr) {
+    void close(close_fn_t fn = nullptr)
+    {
         closed_ = true;
         while (!rq.empty()) {
             auto w = rq.front();
@@ -194,13 +203,15 @@ template <typename T> class chan_t {
     }
 };
 
-class wait_group_t {
+class wait_group_t
+{
     co_t *waiter = nullptr;
     int cnt = 0;
 
-  public:
+public:
     void add(int delta) { cnt += delta; }
-    void done() {
+    void done()
+    {
         cnt--;
         if (cnt == 0 && waiter) {
             auto co = waiter;
@@ -208,7 +219,8 @@ class wait_group_t {
             co->resume();
         }
     }
-    bool wait(co_t *w) {
+    bool wait(co_t *w)
+    {
         if (cnt == 0)
             return true;
         waiter = w;
