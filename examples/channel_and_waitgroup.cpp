@@ -22,7 +22,7 @@ int main() {
     auto fs_write = go([=](co_t* __self, state_t* _st) {
         auto st = dynamic_cast<fs_write_state_t*>(_st);
         while (true) {
-            COCO_ASYNC_BEGIN(loop);
+            COCO_ASYNC_BEGIN();
             COCO_READ_CHAN(fs_write_ch, st->i);
             if (!fs_write_ch->closed()) {
                 printf("---> FS WRITE, i=%d\n", st->i);
@@ -41,7 +41,7 @@ out:
     auto kafka_produce = go([=](co_t* __self, state_t* _st) {
         auto st = dynamic_cast<kafka_produce_state_t*>(_st);
         while (true) {
-            COCO_ASYNC_BEGIN(loop);
+            COCO_ASYNC_BEGIN();
             COCO_READ_CHAN(kafka_produce_ch, st->i);
             if (!kafka_produce_ch->closed()) {
                 printf("---> KAFKA produce message, i=%d\n", st->i);
@@ -59,9 +59,9 @@ out:
 
     auto sock_read = new co_t([=](co_t* __self, state_t* _st) {
         auto st = dynamic_cast<sock_read_state_t*>(_st);
-        COCO_ASYNC_BEGIN(sock_read);
+        COCO_ASYNC_BEGIN();
         for (; st->cnt < 3; st->cnt++) {
-            COCO_ASYNC_BEGIN(loop);
+            COCO_ASYNC_BEGIN();
             COCO_WRITE_CHAN(fs_write_ch, st->cnt);
             COCO_WRITE_CHAN(kafka_produce_ch, st->cnt);
             COCO_ASYNC_END();

@@ -27,9 +27,9 @@
 #include <queue>
 #include <string>
 
-#define COCO_ASYNC_BEGIN(tag)                                       \
+#define COCO_ASYNC_BEGIN()                                          \
     {                                                               \
-        auto __tag = #tag;                                          \
+        auto __tag = __LINE__;                                      \
         auto __it = _st->state.find(__tag);                         \
         auto __st = (__it == _st->state.end()) ? -1 : __it->second; \
         switch (__st) {                                             \
@@ -84,7 +84,7 @@
 namespace coco
 {
 struct state_t {
-    std::map<std::string, int> state;
+    std::map<int, int> state;
     virtual ~state_t() {}
 };
 

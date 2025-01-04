@@ -481,14 +481,14 @@ int main() {
         auto st = dynamic_cast<iouring_state_t*>(_st);
         st->co = __self;
         while (true) {
-            COCO_ASYNC_BEGIN(loop);
+            COCO_ASYNC_BEGIN();
             do_accept(server_socket, nullptr, nullptr, st);
             COCO_YIELD();
             auto sk = st->res;
             go([=](co_t* __self, state_t* _st) {
                 auto req = dynamic_cast<conn_state_t*>(_st);
                 req->co = __self;
-                COCO_ASYNC_BEGIN(process_req);
+                COCO_ASYNC_BEGIN();
 
                 read_request(req);
                 COCO_YIELD();
