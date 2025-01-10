@@ -59,18 +59,22 @@
 #define COCO_TOKEN_(x, y) x##y
 #define COCO_TOKEN(x, y) COCO_TOKEN_(x, y)
 
-#define COCO_CHAN_OP_(op, ch, t)                        \
-    COCO_TOKEN(tag1, __LINE__) : if (ch->op(__self, t)) \
-    {                                                   \
-        goto COCO_TOKEN(tag2, __LINE__);                \
-    }                                                   \
-    COCO_YIELD()                                        \
-    goto COCO_TOKEN(tag1, __LINE__);                    \
+#define COCO_CHAN_OP_(op, ch, t, ok)                 \
+    COCO_TOKEN(tag1, __LINE__) :                     \
+    {                                                \
+        auto ret = ch->op(__self, t);                \
+        if (ret != co_t::YIELD) {                    \
+            ok = (ret == co_t::TRUE) ? true : false; \
+            goto COCO_TOKEN(tag2, __LINE__);         \
+        }                                            \
+    }                                                \
+    COCO_YIELD()                                     \
+    goto COCO_TOKEN(tag1, __LINE__);                 \
     COCO_TOKEN(tag2, __LINE__) : (void)1;
 
-#define COCO_WRITE_CHAN(ch, t) COCO_CHAN_OP_(put, ch, t)
+#define COCO_WRITE_CHAN(ch, t, ok) COCO_CHAN_OP_(put, ch, t, ok)
 
-#define COCO_READ_CHAN(ch, t) COCO_CHAN_OP_(get, ch, t)
+#define COCO_READ_CHAN(ch, t, ok) COCO_CHAN_OP_(get, ch, t, ok)
 
 #define COCO_WAIT(wg)                                  \
     COCO_TOKEN(tag1, __LINE__) : if (wg->wait(__self)) \
@@ -92,7 +96,8 @@ class co_t
 {
 public:
     enum ret_t {
-        START,
+        FALSE,
+        TRUE,
         YIELD,
         DONE,
     };
@@ -103,7 +108,7 @@ private:
     fn_t fn;
 
 public:
-    ret_t ret = START;
+    ret_t ret = TRUE;
     co_t(fn_t const &fn, state_t *st = new state_t) : st(st), fn(fn) {}
     bool done() { return ret == DONE; }
     ret_t resume()
@@ -139,11 +144,8 @@ public:
 
     bool closed() { return closed_; }
 
-    bool get(co_t *co, T &t)
+    co_t::ret_t get(co_t *co, T &t)
     {
-        if (closed())
-            return true;
-
         if (!data.empty()) {
             t = data.front();
             data.pop();
@@ -152,17 +154,20 @@ public:
                 wq.pop();
                 waiter->resume();
             }
-            return true;
+            return co_t::TRUE;
         }
 
+        if (closed())
+            return co_t::FALSE;
+
         rq.push(co);
-        return false;
+        return co_t::YIELD;
     }
 
-    bool put(co_t *co, T t)
+    co_t::ret_t put(co_t *co, T t)
     {
         if (closed())
-            return true;
+            return co_t::FALSE;
 
         data.push(t);
 
@@ -170,15 +175,15 @@ public:
             auto waiter = rq.front();
             rq.pop();
             waiter->resume();
-            return true;
+            return co_t::TRUE;
         }
 
         if (data.size() > cap) {
             rq.push(co);
-            return false;
+            return co_t::YIELD;
         }
 
-        return true;
+        return co_t::TRUE;
     }
 
     void close(close_fn_t fn = nullptr)

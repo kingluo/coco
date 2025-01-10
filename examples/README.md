@@ -23,7 +23,7 @@ g++ -I. -O2 -Wall -Wextra -Werror examples/channel_and_waitgroup.cpp && ./a.out
 Transform the io_uring webserver [example](https://unixism.net/loti/tutorial/webserver_liburing.html) into coroutines.
 
 ```bash
-$ g++ -I. -ggdb -O2 -Wall -Wextra -Werror examples/webserver.cpp -luring -o examples/webserver && (cd examples/ && ./webserver)
+g++ -I. -ggdb -O2 -Wall -Wextra -Werror examples/webserver.cpp -luring -o examples/webserver && (cd examples/ && ./webserver)
 Minimum kernel version required is: 5.5
 Your kernel version is: 6.8
 ZeroHTTPd listening on port: 8000, fd=3

@@ -16,25 +16,29 @@ coco is a simple stackless, single-threaded, and header-only C++11 coroutine lib
 channel and waitgroup:
 
 ```cpp
-    auto sock_read = new co_t([=](co_t* __self, state_t* _st) {
-        auto st = dynamic_cast<sock_read_state_t*>(_st);
-        COCO_ASYNC_BEGIN();
-        for (; st->cnt < 3; st->cnt++) {
+    auto sock_read = new co_t(
+        [=](co_t *__self, state_t *_st) {
+            auto st = dynamic_cast<sock_read_state_t *>(_st);
+            bool ok = false;
             COCO_ASYNC_BEGIN();
-            COCO_WRITE_CHAN(fs_write_ch, st->cnt);
-            COCO_WRITE_CHAN(kafka_produce_ch, st->cnt);
+            for (; st->cnt < 3; st->cnt++) {
+                COCO_ASYNC_BEGIN();
+                COCO_WRITE_CHAN(fs_write_ch, st->cnt, ok);
+                (void)ok;
+                COCO_WRITE_CHAN(kafka_produce_ch, st->cnt, ok);
+                (void)ok;
+                COCO_ASYNC_END();
+            }
+            fs_write_ch->close();
+            kafka_produce_ch->close();
+            COCO_WAIT(wg);
             COCO_ASYNC_END();
-        }
-        fs_write_ch->close();
-        kafka_produce_ch->close();
-        COCO_WAIT(wg);
-        COCO_ASYNC_END();
-        COCO_DONE();
-    }, new sock_read_state_t);
+            COCO_DONE();
+        },
+        new sock_read_state_t);
 
     while (!sock_read->done())
         sock_read->resume();
-
 ```
 
 webserver:
@@ -68,7 +72,6 @@ webserver:
         }
         COCO_DONE();
     }, new iouring_state_t);
-
 ```
 
 ## Coding restrictions
