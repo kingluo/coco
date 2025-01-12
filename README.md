@@ -20,20 +20,20 @@ channel and waitgroup:
         [=](co_t *__self, state_t *_st) {
             auto st = dynamic_cast<sock_read_state_t *>(_st);
             bool ok = false;
-            COCO_ASYNC_BEGIN();
+            coco_begin();
             for (; st->cnt < 3; st->cnt++) {
-                COCO_ASYNC_BEGIN();
-                COCO_WRITE_CHAN(fs_write_ch, st->cnt, ok);
+                coco_begin();
+                coco_write_chan(fs_write_ch, st->cnt, ok);
                 (void)ok;
-                COCO_WRITE_CHAN(kafka_produce_ch, st->cnt, ok);
+                coco_write_chan(kafka_produce_ch, st->cnt, ok);
                 (void)ok;
-                COCO_ASYNC_END();
+                coco_end();
             }
             fs_write_ch->close();
             kafka_produce_ch->close();
-            COCO_WAIT(wg);
-            COCO_ASYNC_END();
-            COCO_DONE();
+            coco_wait(wg);
+            coco_end();
+            coco_done();
         },
         new sock_read_state_t);
 
@@ -48,29 +48,29 @@ webserver:
         auto st = dynamic_cast<iouring_state_t*>(_st);
         st->co = __self;
         while (true) {
-            COCO_ASYNC_BEGIN();
+            coco_begin();
             do_accept(server_socket, nullptr, nullptr, st);
-            COCO_YIELD();
+            coco_yield();
             auto sk = st->res;
             go([=](co_t* __self, state_t* _st) {
                 auto req = dynamic_cast<conn_state_t*>(_st);
                 req->co = __self;
-                COCO_ASYNC_BEGIN();
+                coco_begin();
 
                 read_request(req);
-                COCO_YIELD();
+                coco_yield();
 
                 handle_request(req);
                 send_response(req);
-                COCO_YIELD();
+                coco_yield();
                 delete __self;
 
-                COCO_ASYNC_END();
-                COCO_DONE();
+                coco_end();
+                coco_done();
             }, new conn_state_t(sk));
-            COCO_ASYNC_END();
+            coco_end();
         }
-        COCO_DONE();
+        coco_done();
     }, new iouring_state_t);
 ```
 

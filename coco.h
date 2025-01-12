@@ -27,7 +27,7 @@
 #include <queue>
 #include <string>
 
-#define COCO_ASYNC_BEGIN()                                          \
+#define coco_begin()                                                \
     {                                                               \
         auto __tag = __LINE__;                                      \
         auto __it = _st->state.find(__tag);                         \
@@ -36,7 +36,7 @@
         case -1: {                                                  \
             (void)1;
 
-#define COCO_ASYNC_END()        \
+#define coco_end()              \
     }                           \
     break;                      \
     default:                    \
@@ -46,9 +46,9 @@
         _st->state[__tag] = -1; \
         }
 
-#define COCO_DONE() return co_t::DONE;
+#define coco_done() return co_t::DONE;
 
-#define COCO_YIELD()              \
+#define coco_yield()              \
     _st->state[__tag] = __LINE__; \
     return co_t::YIELD;           \
     break;                        \
@@ -68,21 +68,19 @@
             goto COCO_TOKEN(tag2, __LINE__);         \
         }                                            \
     }                                                \
-    COCO_YIELD()                                     \
-    goto COCO_TOKEN(tag1, __LINE__);                 \
+    coco_yield() goto COCO_TOKEN(tag1, __LINE__);    \
     COCO_TOKEN(tag2, __LINE__) : (void)1;
 
-#define COCO_WRITE_CHAN(ch, t, ok) COCO_CHAN_OP_(put, ch, t, ok)
+#define coco_write_chan(ch, t, ok) COCO_CHAN_OP_(put, ch, t, ok)
 
-#define COCO_READ_CHAN(ch, t, ok) COCO_CHAN_OP_(get, ch, t, ok)
+#define coco_read_chan(ch, t, ok) COCO_CHAN_OP_(get, ch, t, ok)
 
-#define COCO_WAIT(wg)                                  \
+#define coco_wait(wg)                                  \
     COCO_TOKEN(tag1, __LINE__) : if (wg->wait(__self)) \
     {                                                  \
         goto COCO_TOKEN(tag2, __LINE__);               \
     }                                                  \
-    COCO_YIELD()                                       \
-    goto COCO_TOKEN(tag1, __LINE__);                   \
+    coco_yield() goto COCO_TOKEN(tag1, __LINE__);      \
     COCO_TOKEN(tag2, __LINE__) : (void)1;
 
 namespace coco
