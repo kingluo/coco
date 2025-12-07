@@ -35,12 +35,19 @@
 namespace coco {
 struct scheduler_t {
     std::queue<std::coroutine_handle<>> q;
-    void schedule(std::coroutine_handle<> handle) { q.push(handle); }
+    void schedule(std::coroutine_handle<> handle) {
+        if (handle && !handle.done()) {
+            q.push(handle);
+        }
+    }
     void run() {
         while (!q.empty()) {
             auto handle = q.front();
             q.pop();
-            handle.resume();
+            // Check if handle is still valid before resuming
+            if (handle && !handle.done()) {
+                handle.resume();
+            }
         }
     }
 
@@ -108,80 +115,53 @@ template <typename T> class chan_t
 
         bool await_ready() const noexcept
         {
-            if (ch->closed()) {
-                return true; // Always ready to read from closed channel
-            }
-
-            if (ch->cap() == 0) {
-                // Unbuffered: ready if there's an unconsumed handoff value
-                return ch->handoff_value.has_value() && ch->handoff_generation > ch->consumed_generation;
-            } else {
-                // Buffered: ready if buffer has data
-                return !ch->dataq.empty();
-            }
+            // Ready if: has buffered data, has handoff data (unbuffered), or channel is closed
+            return !ch->dataq.empty() || !ch->handoff_q.empty() || ch->closed();
         }
 
         void await_suspend(std::coroutine_handle<> handle) noexcept
         {
+            is_waked_up_ = true;
             ch->rq.push(handle);
         }
 
         data_t await_resume() noexcept
         {
-            if (ch->cap() == 0) {
-                // Unbuffered channel: get handoff value with generation check
-                if (ch->handoff_value.has_value() && ch->handoff_generation > ch->consumed_generation) {
-                    auto value = ch->handoff_value.value();
-                    ch->consumed_generation = ch->handoff_generation; // Mark as consumed
-
-                    // Wake up a waiting writer if any
-                    if (!ch->wq.empty()) {
-                        auto writer = ch->wq.front();
-                        ch->wq.pop();
-                        if (writer && !writer.done()) {
-                            scheduler_t::instance().schedule(writer);
-                        }
+            // For unbuffered channels, check handoff queue first
+            if (ch->cap() == 0 && !ch->handoff_q.empty()) {
+                auto data = ch->handoff_q.front();
+                ch->handoff_q.pop();
+                // Wake up the waiting writer
+                if (!ch->wq.empty()) {
+                    auto writer = ch->wq.front();
+                    ch->wq.pop();
+                    if (writer && !writer.done()) {
+                        scheduler_t::instance().schedule(writer);
                     }
-
-                    return std::make_optional(value);
                 }
-
-                // Channel is closed
-                if (ch->closed()) {
-                    return std::nullopt;
-                }
-
-                // No data available - this shouldn't happen if await_ready was correct
-                return std::nullopt;
-            } else {
-                // Buffered channel
-                if (!ch->dataq.empty()) {
-                    auto value = ch->dataq.front();
-                    ch->dataq.pop();
-
-                    // Resume a waiting writer if any
-                    if (!ch->wq.empty()) {
-                        auto waiter = ch->wq.front();
-                        ch->wq.pop();
-                        if (waiter && !waiter.done()) {
-                            scheduler_t::instance().schedule(waiter);
-                        }
-                    }
-
-                    return std::make_optional(value);
-                }
-
-                // Channel is closed and buffer is empty
-                if (ch->closed()) {
-                    return std::nullopt;
-                }
+                return data;
             }
-
+            // For buffered channels, read from main queue
+            if (!ch->dataq.empty()) {
+                auto data = ch->dataq.front();
+                ch->dataq.pop();
+                // Wake up a waiting writer if buffer has space now
+                if (!ch->wq.empty()) {
+                    auto writer = ch->wq.front();
+                    ch->wq.pop();
+                    if (writer && !writer.done()) {
+                        scheduler_t::instance().schedule(writer);
+                    }
+                }
+                return data;
+            }
+            // Channel is closed and empty
             return std::nullopt;
         }
 
     private:
         chan_t<T> *ch;
+        bool is_waked_up_{false};
     };
 
     struct write_wait_t
@@ -190,14 +170,13 @@ template <typename T> class chan_t
 
         bool await_ready() const noexcept
         {
-            if (ch->closed())
-                return true;
+            if (ch->closed()) return true; // Always ready if closed (will return false)
 
             if (ch->cap() == 0) {
-                // Unbuffered: always suspend to ensure consistent handoff
-                return false;
+                // Unbuffered: ready if there's a waiting reader
+                return !ch->rq.empty();
             } else {
-                // Buffered: ready if buffer is not full
+                // Buffered: ready if buffer has space
                 return ch->dataq.size() < ch->cap();
             }
         }
@@ -205,23 +184,11 @@ template <typename T> class chan_t
         void await_suspend(std::coroutine_handle<> handle) noexcept
         {
             if (ch->cap() == 0) {
-                // For unbuffered channels, set handoff value with new generation
-                ch->handoff_value = data_;
-                ch->handoff_generation++; // New generation for this value
-                ch->wq.push(handle);
-
-                // Wake up a waiting reader if any
-                if (!ch->rq.empty()) {
-                    auto reader = ch->rq.front();
-                    ch->rq.pop();
-                    if (reader && !reader.done()) {
-                        scheduler_t::instance().schedule(reader);
-                    }
-                }
-            } else {
-                // For buffered channels, use regular writer queue
-                ch->wq.push(handle);
+                // For unbuffered channels, put data in handoff queue
+                ch->handoff_q.push(data_);
             }
+            is_waked_up_ = true;
+            ch->wq.push(handle);
         }
 
         bool await_resume() noexcept
@@ -229,16 +196,40 @@ template <typename T> class chan_t
             if (ch->closed())
                 return false;
 
+            if (is_waked_up_) {
+                // We were woken up by a reader
+                if (ch->cap() == 0) {
+                    // For unbuffered channels, data was already put in handoff_q in await_suspend
+                    // and should have been consumed by the reader that woke us up
+                    return true;
+                } else {
+                    // For buffered channels, add to buffer
+                    if (ch->dataq.size() < ch->cap()) {
+                        ch->dataq.push(data_);
+                        return true;
+                    }
+                    // Buffer is full, this shouldn't happen if logic is correct
+                    return false;
+                }
+            }
+
+            // Direct write without suspension (await_ready returned true)
             if (ch->cap() == 0) {
-                // Unbuffered channel: we were woken up by a reader
-                // Our data should have been taken from handoff_data
+                // Unbuffered: direct handoff to waiting reader
+                ch->handoff_q.push(data_);
+                if (!ch->rq.empty()) {
+                    auto reader = ch->rq.front();
+                    ch->rq.pop();
+                    if (reader && !reader.done()) {
+                        scheduler_t::instance().schedule(reader);
+                    }
+                }
                 return true;
             } else {
-                // Buffered channel: add to buffer if there's space
+                // Buffered: add to buffer
                 if (ch->dataq.size() < ch->cap()) {
                     ch->dataq.push(data_);
-
-                    // Resume a waiting reader if any
+                    // Wake up a waiting reader if any
                     if (!ch->rq.empty()) {
                         auto reader = ch->rq.front();
                         ch->rq.pop();
@@ -246,29 +237,24 @@ template <typename T> class chan_t
                             scheduler_t::instance().schedule(reader);
                         }
                     }
-
                     return true;
                 }
+                return false; // Buffer full, shouldn't happen
             }
-
-            return false;
         }
 
     private:
         chan_t<T> *ch;
         T data_;
+        bool is_waked_up_{false};
     };
 
     size_t cap_{};
     std::queue<T> dataq;
+    std::queue<T> handoff_q;
     bool closed_{};
     std::queue<std::coroutine_handle<>> rq;
     std::queue<std::coroutine_handle<>> wq;
-
-    // For unbuffered channels: generation-based handoff to prevent duplicates
-    std::optional<T> handoff_value;
-    size_t handoff_generation = 0;
-    size_t consumed_generation = 0;
 
 private:
     chan_t(chan_t &&other) = delete;
