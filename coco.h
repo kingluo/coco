@@ -2,7 +2,7 @@
 
 // MIT License
 //
-// Copyright (c) 2024 jinhua luo, luajit.io@gmail.com
+// Copyright (c) 2024-2025 jinhua luo, luajit.io@gmail.com
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -22,212 +22,352 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include <climits>
+#include <coroutine>
 #include <functional>
-#include <map>
+#include <optional>
 #include <queue>
+#include <stdint.h>
 #include <string>
+#include <utility>
+#include <variant>
 
-#define coco_begin()                                                \
-    {                                                               \
-        auto __tag = __LINE__;                                      \
-        auto __it = _st->state.find(__tag);                         \
-        auto __st = (__it == _st->state.end()) ? -1 : __it->second; \
-        switch (__st) {                                             \
-        case -1: {                                                  \
-            (void)1;
-
-#define coco_end()              \
-    }                           \
-    break;                      \
-    default:                    \
-        break;                  \
-        }                       \
-        ;                       \
-        _st->state[__tag] = -1; \
+namespace coco {
+struct scheduler_t {
+    std::queue<std::coroutine_handle<>> q;
+    void schedule(std::coroutine_handle<> handle) { q.push(handle); }
+    void run() {
+        while (!q.empty()) {
+            auto handle = q.front();
+            q.pop();
+            handle.resume();
         }
-
-#define coco_done() return co_t::DONE;
-
-#define coco_yield()              \
-    _st->state[__tag] = __LINE__; \
-    return co_t::YIELD;           \
-    break;                        \
-    }                             \
-    case __LINE__: {              \
-        (void)1;
-
-#define COCO_TOKEN_(x, y) x##y
-#define COCO_TOKEN(x, y) COCO_TOKEN_(x, y)
-
-#define COCO_CHAN_OP_(op, ch, t, ok)                 \
-    COCO_TOKEN(tag1, __LINE__) :                     \
-    {                                                \
-        auto ret = ch->op(__self, t);                \
-        if (ret != co_t::YIELD) {                    \
-            ok = (ret == co_t::TRUE) ? true : false; \
-            goto COCO_TOKEN(tag2, __LINE__);         \
-        }                                            \
-    }                                                \
-    coco_yield() goto COCO_TOKEN(tag1, __LINE__);    \
-    COCO_TOKEN(tag2, __LINE__) : (void)1;
-
-#define coco_write_chan(ch, t, ok) COCO_CHAN_OP_(put, ch, t, ok)
-
-#define coco_read_chan(ch, t, ok) COCO_CHAN_OP_(get, ch, t, ok)
-
-#define coco_wait(wg)                                  \
-    COCO_TOKEN(tag1, __LINE__) : if (wg->wait(__self)) \
-    {                                                  \
-        goto COCO_TOKEN(tag2, __LINE__);               \
-    }                                                  \
-    coco_yield() goto COCO_TOKEN(tag1, __LINE__);      \
-    COCO_TOKEN(tag2, __LINE__) : (void)1;
-
-namespace coco
-{
-struct state_t {
-    std::map<int, int> state;
-    virtual ~state_t() {}
-};
-
-class co_t
-{
-public:
-    enum ret_t {
-        FALSE,
-        TRUE,
-        YIELD,
-        DONE,
-    };
-    typedef std::function<ret_t(co_t *, state_t *)> fn_t;
-
-private:
-    state_t *st;
-    fn_t fn;
-
-public:
-    ret_t ret = TRUE;
-    co_t(fn_t const &fn, state_t *st = new state_t) : st(st), fn(fn) {}
-    bool done() { return ret == DONE; }
-    ret_t resume()
-    {
-        if (done())
-            return DONE;
-        ret = fn(this, st);
-        return ret;
     }
-    ~co_t() { delete st; }
+
+    void clear() {
+        while (!q.empty()) {
+            q.pop();
+        }
+    }
+
+    static scheduler_t &instance() {
+        static thread_local scheduler_t scheduler;
+        return scheduler;
+    }
 };
 
-inline co_t *go(co_t::fn_t const &fn, state_t *st = new state_t)
+struct co_t
 {
-    auto co = new co_t(fn, st);
-    co->resume();
+    struct promise_type
+    {
+        co_t get_return_object()
+        {
+            return co_t{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+        std::suspend_always yield_value(std::monostate) noexcept { return {}; }
+    };
+    std::coroutine_handle<promise_type> handle;
+
+    co_t(std::coroutine_handle<promise_type> h) : handle(h) {}
+    ~co_t() { if (handle) handle.destroy(); }
+
+    // Delete copy constructor and assignment
+    co_t(const co_t&) = delete;
+    co_t& operator=(const co_t&) = delete;
+
+    // Move constructor and assignment
+    co_t(co_t&& other) noexcept : handle(std::exchange(other.handle, {})) {}
+    co_t& operator=(co_t&& other) noexcept {
+        if (this != &other) {
+            if (handle) handle.destroy();
+            handle = std::exchange(other.handle, {});
+        }
+        return *this;
+    }
+
+    void resume() { scheduler_t::instance().schedule(handle); }
+};
+
+inline co_t go(std::function<co_t()> fn) {
+    auto co = fn();
+    co.resume();
     return co;
 }
 
 template <typename T> class chan_t
 {
-    typedef std::function<void(T)> close_fn_t;
-    size_t cap = 1;
-    std::queue<T> data;
-    std::queue<co_t *> rq;
-    std::queue<co_t *> wq;
-    bool closed_ = false;
+    typedef std::optional<T> data_t;
+
+    struct read_wait_t
+    {
+        read_wait_t(chan_t<T> *ch) : ch(ch) {}
+
+        bool await_ready() const noexcept
+        {
+            if (ch->closed()) {
+                return true; // Always ready to read from closed channel
+            }
+
+            if (ch->cap() == 0) {
+                // Unbuffered: ready if there's an unconsumed handoff value
+                return ch->handoff_value.has_value() && ch->handoff_generation > ch->consumed_generation;
+            } else {
+                // Buffered: ready if buffer has data
+                return !ch->dataq.empty();
+            }
+        }
+
+        void await_suspend(std::coroutine_handle<> handle) noexcept
+        {
+            ch->rq.push(handle);
+        }
+
+        data_t await_resume() noexcept
+        {
+            if (ch->cap() == 0) {
+                // Unbuffered channel: get handoff value with generation check
+                if (ch->handoff_value.has_value() && ch->handoff_generation > ch->consumed_generation) {
+                    auto value = ch->handoff_value.value();
+                    ch->consumed_generation = ch->handoff_generation; // Mark as consumed
+
+                    // Wake up a waiting writer if any
+                    if (!ch->wq.empty()) {
+                        auto writer = ch->wq.front();
+                        ch->wq.pop();
+                        if (writer && !writer.done()) {
+                            scheduler_t::instance().schedule(writer);
+                        }
+                    }
+
+                    return std::make_optional(value);
+                }
+
+                // Channel is closed
+                if (ch->closed()) {
+                    return std::nullopt;
+                }
+
+                // No data available - this shouldn't happen if await_ready was correct
+                return std::nullopt;
+            } else {
+                // Buffered channel
+                if (!ch->dataq.empty()) {
+                    auto value = ch->dataq.front();
+                    ch->dataq.pop();
+
+                    // Resume a waiting writer if any
+                    if (!ch->wq.empty()) {
+                        auto waiter = ch->wq.front();
+                        ch->wq.pop();
+                        if (waiter && !waiter.done()) {
+                            scheduler_t::instance().schedule(waiter);
+                        }
+                    }
+
+                    return std::make_optional(value);
+                }
+
+                // Channel is closed and buffer is empty
+                if (ch->closed()) {
+                    return std::nullopt;
+                }
+            }
+
+            return std::nullopt;
+        }
+
+    private:
+        chan_t<T> *ch;
+    };
+
+    struct write_wait_t
+    {
+        write_wait_t(chan_t<T> *ch, T data) : ch(ch), data_(data) {}
+
+        bool await_ready() const noexcept
+        {
+            if (ch->closed())
+                return true;
+
+            if (ch->cap() == 0) {
+                // Unbuffered: always suspend to ensure consistent handoff
+                return false;
+            } else {
+                // Buffered: ready if buffer is not full
+                return ch->dataq.size() < ch->cap();
+            }
+        }
+
+        void await_suspend(std::coroutine_handle<> handle) noexcept
+        {
+            if (ch->cap() == 0) {
+                // For unbuffered channels, set handoff value with new generation
+                ch->handoff_value = data_;
+                ch->handoff_generation++; // New generation for this value
+                ch->wq.push(handle);
+
+                // Wake up a waiting reader if any
+                if (!ch->rq.empty()) {
+                    auto reader = ch->rq.front();
+                    ch->rq.pop();
+                    if (reader && !reader.done()) {
+                        scheduler_t::instance().schedule(reader);
+                    }
+                }
+            } else {
+                // For buffered channels, use regular writer queue
+                ch->wq.push(handle);
+            }
+        }
+
+        bool await_resume() noexcept
+        {
+            if (ch->closed())
+                return false;
+
+            if (ch->cap() == 0) {
+                // Unbuffered channel: we were woken up by a reader
+                // Our data should have been taken from handoff_data
+                return true;
+            } else {
+                // Buffered channel: add to buffer if there's space
+                if (ch->dataq.size() < ch->cap()) {
+                    ch->dataq.push(data_);
+
+                    // Resume a waiting reader if any
+                    if (!ch->rq.empty()) {
+                        auto reader = ch->rq.front();
+                        ch->rq.pop();
+                        if (reader && !reader.done()) {
+                            scheduler_t::instance().schedule(reader);
+                        }
+                    }
+
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+    private:
+        chan_t<T> *ch;
+        T data_;
+    };
+
+    size_t cap_{};
+    std::queue<T> dataq;
+    bool closed_{};
+    std::queue<std::coroutine_handle<>> rq;
+    std::queue<std::coroutine_handle<>> wq;
+
+    // For unbuffered channels: generation-based handoff to prevent duplicates
+    std::optional<T> handoff_value;
+    size_t handoff_generation = 0;
+    size_t consumed_generation = 0;
+
+private:
+    chan_t(chan_t &&other) = delete;
+    chan_t(const chan_t &other) = delete;
+    chan_t &operator=(chan_t &&other) = delete;
+    chan_t &operator=(const chan_t &other) = delete;
 
 public:
-    chan_t(int cap = 0) : cap(cap) {}
+    chan_t(int cap = 0) : cap_(cap) {}
 
-    bool ready() { return !data.empty(); }
+    size_t size() { return dataq.size(); }
+
+    size_t cap() { return cap_; }
+
+    bool ready() { return !dataq.empty(); }
 
     bool closed() { return closed_; }
 
-    co_t::ret_t get(co_t *co, T &t)
+    read_wait_t read()
     {
-        if (!data.empty()) {
-            t = data.front();
-            data.pop();
-            if (!wq.empty()) {
-                auto waiter = wq.front();
-                wq.pop();
-                waiter->resume();
-            }
-            return co_t::TRUE;
-        }
-
-        if (closed())
-            return co_t::FALSE;
-
-        rq.push(co);
-        return co_t::YIELD;
+        return read_wait_t(this);
     }
 
-    co_t::ret_t put(co_t *co, T t)
+    write_wait_t write(T data)
     {
-        if (closed())
-            return co_t::FALSE;
-
-        data.push(t);
-
-        if (!rq.empty()) {
-            auto waiter = rq.front();
-            rq.pop();
-            waiter->resume();
-            return co_t::TRUE;
-        }
-
-        if (data.size() > cap) {
-            rq.push(co);
-            return co_t::YIELD;
-        }
-
-        return co_t::TRUE;
+        return write_wait_t(this, data);
     }
 
-    void close(close_fn_t fn = nullptr)
+    void close()
     {
         closed_ = true;
+
         while (!rq.empty()) {
-            auto w = rq.front();
+            auto reader = std::move(rq.front());
             rq.pop();
-            w->resume();
-        }
-        while (!wq.empty()) {
-            auto w = wq.front();
-            wq.pop();
-            w->resume();
-        }
-        if (fn) {
-            while (!data.empty()) {
-                auto &v = data.front();
-                fn(v);
+            if (reader && !reader.done()) {
+                scheduler_t::instance().schedule(reader);
             }
         }
+        while (!wq.empty()) {
+            auto writer = std::move(wq.front());
+            wq.pop();
+            if (writer && !writer.done()) {
+                scheduler_t::instance().schedule(writer);
+            }
+        }
+
+
     }
 };
 
-class wait_group_t
+class wg_t
 {
-    co_t *waiter = nullptr;
-    int cnt = 0;
+    struct async_wait_t
+    {
+        async_wait_t(wg_t *wg) : wg(wg) {}
+        bool await_ready() const noexcept { return wg->cnt == 0; }
+        void await_suspend(std::coroutine_handle<> handle) noexcept { wg->waiters.push(handle); }
+        void await_resume() noexcept {}
+
+    private:
+        wg_t *wg;
+    };
+
+    std::queue<std::coroutine_handle<>> waiters;
+    uint64_t cnt{};
 
 public:
-    void add(int delta) { cnt += delta; }
+    void add(uint64_t delta = 1) {
+        cnt += delta;
+    }
+
     void done()
     {
-        cnt--;
-        if (cnt == 0 && waiter) {
-            auto co = waiter;
-            waiter = nullptr;
-            co->resume();
+        if (cnt > 0) {
+            cnt--;
+        }
+        if (cnt == 0)
+        {
+            // Resume all waiting coroutines
+            while (!waiters.empty()) {
+                auto waiter = std::move(waiters.front());
+                waiters.pop();
+                if (waiter && !waiter.done()) {
+                    scheduler_t::instance().schedule(waiter);
+                }
+            }
         }
     }
-    bool wait(co_t *w)
-    {
-        if (cnt == 0)
-            return true;
-        waiter = w;
-        return false;
-    }
+
+    async_wait_t wait() { return async_wait_t(this); }
+};
+
+class wg_guard_t
+{
+    wg_t *wg;
+
+public:
+    wg_guard_t(wg_t *wg) : wg(wg) { wg->add(); }
+    ~wg_guard_t() { wg->done(); }
 };
 } // namespace coco

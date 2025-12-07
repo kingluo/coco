@@ -9,21 +9,36 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/utsname.h>
+#include <errno.h>
+#include <array>
+#include <iostream>
+#include <memory>
+#include <vector>
+#include <algorithm>
+#include <list>
 
-#include "coco.h"
+#include "../coco.h"
 using namespace coco;
 
-struct iouring_state_t : public state_t {
+struct iouring_awaiter {
     int res = -1;
-    co_t *co = nullptr;
+    std::coroutine_handle<> handle;
+
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept { handle = h; }
+    int await_resume() noexcept { return res; }
 };
 
-struct conn_state_t : public iouring_state_t {
+struct conn_state_t {
     int client_socket = -1;
     static constexpr int MAX_IOVLEN = 16;
     int iovec_count = 0;
     std::array<iovec, MAX_IOVLEN> iov{};
+    iouring_awaiter read_awaiter;
+    iouring_awaiter write_awaiter;
+
     conn_state_t(int sk) : client_socket(sk) {}
+
     void reset() {
         if (iovec_count) {
             for (int i = 0; i < iovec_count; i++) {
@@ -34,6 +49,7 @@ struct conn_state_t : public iouring_state_t {
             memset(&iov[0], 0, sizeof(iovec) * iovec_count);
         }
     }
+
     ~conn_state_t() {
         reset();
         close(client_socket);
@@ -49,6 +65,10 @@ struct conn_state_t : public iouring_state_t {
 #define MIN_MAJOR_VERSION       5
 
 struct io_uring ring;
+
+// Global container to track active connection coroutines
+// Use list to avoid reallocation issues that would invalidate coroutine handles
+std::list<co_t> active_connections;
 
 const char *unimplemented_content = \
                                 "HTTP/1.0 400 Bad Request\r\n"
@@ -189,35 +209,37 @@ int setup_listening_socket(int port) {
     return (sock);
 }
 
-int do_accept(int server_socket, struct sockaddr_in *client_addr,
-                       socklen_t *client_addr_len, iouring_state_t *st) {
+// Global awaiter for accept operations
+iouring_awaiter accept_awaiter;
+
+iouring_awaiter& do_accept(int server_socket, struct sockaddr_in *client_addr,
+                         socklen_t *client_addr_len) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     io_uring_prep_accept(sqe, server_socket,
             (struct sockaddr *) client_addr, client_addr_len, 0);
-    io_uring_sqe_set_data(sqe, st);
+    io_uring_sqe_set_data(sqe, &accept_awaiter);
     io_uring_submit(&ring);
-
-    return 0;
+    return accept_awaiter;
 }
 
-int read_request(conn_state_t *req) {
+iouring_awaiter& read_request(conn_state_t *req) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     req->iov[0].iov_base = malloc(READ_SZ);
     req->iov[0].iov_len = READ_SZ;
     memset(req->iov[0].iov_base, 0, READ_SZ);
     /* Linux kernel 5.5 has support for readv, but not for recv() or read() */
     io_uring_prep_readv(sqe, req->client_socket, req->iov.data(), 1, 0);
-    io_uring_sqe_set_data(sqe, dynamic_cast<iouring_state_t*>(req));
+    io_uring_sqe_set_data(sqe, &req->read_awaiter);
     io_uring_submit(&ring);
-    return 0;
+    return req->read_awaiter;
 }
 
-int send_response(conn_state_t *req) {
+iouring_awaiter& send_response(conn_state_t *req) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     io_uring_prep_writev(sqe, req->client_socket, req->iov.data(), req->iovec_count, 0);
-    io_uring_sqe_set_data(sqe, dynamic_cast<iouring_state_t*>(req));
+    io_uring_sqe_set_data(sqe, &req->write_awaiter);
     io_uring_submit(&ring);
-    return 0;
+    return req->write_awaiter;
 }
 
 void _send_static_string_content(const char *str, conn_state_t *req) {
@@ -439,29 +461,97 @@ int handle_request(conn_state_t *req) {
     return 0;
 }
 
+co_t handle_connection(int client_socket) {
+    auto req = std::make_unique<conn_state_t>(client_socket);
+
+    try {
+        // Read request
+        int bytes_read = co_await read_request(req.get());
+        if (bytes_read <= 0) {
+            // Client disconnected or read error - this is normal
+            co_return;
+        }
+
+        // Handle request
+        handle_request(req.get());
+
+        // Send response
+        int bytes_sent = co_await send_response(req.get());
+        if (bytes_sent <= 0) {
+            // Failed to send response - client may have disconnected
+        }
+    } catch (...) {
+        // Handle any exceptions to prevent coroutine from being left in bad state
+        printf("Exception in handle_connection for socket %d\n", client_socket);
+    }
+}
+
+co_t server_coroutine(int server_socket) {
+    while (true) {
+        int client_socket = co_await do_accept(server_socket, nullptr, nullptr);
+        if (client_socket < 0) {
+            // Accept failed - this can happen during server shutdown
+            continue;
+        }
+
+        // Start a new coroutine to handle this connection and store it
+        active_connections.emplace_back(handle_connection(client_socket));
+
+        // Clean up completed connections
+        active_connections.remove_if([](const co_t& conn) {
+            return conn.handle.done();
+        });
+    }
+}
+
 void server_loop(int server_socket) {
+    auto server_coro = server_coroutine(server_socket);
+
     while (true) {
         struct io_uring_cqe *cqe;
         int ret = io_uring_wait_cqe(&ring, &cqe);
         if (ret < 0)
             fatal_error("io_uring_wait_cqe");
         if (cqe->res < 0) {
-            fprintf(stderr, "Async request failed: %s\n",
-                    strerror(-cqe->res));
-            close(server_socket);
-            exit(1);
+            // Handle different types of errors appropriately
+            int error_code = -cqe->res;
+            if (error_code == EBADF || error_code == ECONNRESET || error_code == EPIPE) {
+                // Client disconnected or connection issues - this is normal
+                // Only log in debug mode to reduce noise
+                // printf("Client connection error: %s (normal)\n", strerror(error_code));
+            } else if (error_code == ENOENT) {
+                // File not found - this is also normal for 404 errors
+                // printf("File not found error: %s\n", strerror(error_code));
+            } else {
+                // Other errors might be more serious
+                fprintf(stderr, "Async request failed: %s\n", strerror(error_code));
+                // Don't exit immediately - let the awaiter handle it
+            }
         }
 
-        iouring_state_t *st = (iouring_state_t*)cqe->user_data;
-        st->res = cqe->res;
-        st->co->resume();
+        iouring_awaiter *awaiter = (iouring_awaiter*)cqe->user_data;
+        awaiter->res = cqe->res;
+        if (awaiter->handle) {
+            awaiter->handle.resume();
+        }
         io_uring_cqe_seen(&ring, cqe);
+
+        // Resume server coroutine
+        if (server_coro.handle && !server_coro.handle.done()) {
+            server_coro.resume();
+        }
     }
+}
+
+void cleanup_connections() {
+    // Clean up all active connections
+    active_connections.clear();
 }
 
 void sigint_handler(int signo) {
     (void)signo;
     printf("Shutting down.\n");
+    cleanup_connections();
     io_uring_queue_exit(&ring);
     exit(0);
 }
@@ -476,35 +566,6 @@ int main() {
 
     signal(SIGINT, sigint_handler);
     io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
-
-    go([=](co_t* __self, state_t* _st) {
-        auto st = dynamic_cast<iouring_state_t*>(_st);
-        st->co = __self;
-        while (true) {
-            coco_begin();
-            do_accept(server_socket, nullptr, nullptr, st);
-            coco_yield();
-            auto sk = st->res;
-            go([=](co_t* __self, state_t* _st) {
-                auto req = dynamic_cast<conn_state_t*>(_st);
-                req->co = __self;
-                coco_begin();
-
-                read_request(req);
-                coco_yield();
-
-                handle_request(req);
-                send_response(req);
-                coco_yield();
-                delete __self;
-
-                coco_end();
-                coco_done();
-            }, new conn_state_t(sk));
-            coco_end();
-        }
-        coco_done();
-    }, new iouring_state_t);
 
     server_loop(server_socket);
 

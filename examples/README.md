@@ -5,7 +5,7 @@
 Different coroutines form complex business logic through channels and waitgroups.
 
 ```bash
-g++ -I. -O2 -Wall -Wextra -Werror examples/channel_and_waitgroup.cpp && ./a.out
+g++ -std=c++20 -I.. -O2 -Wall -Wextra -Werror examples/channel_and_waitgroup.cpp && ./a.out
 ---> FS WRITE, i=0
 ---> KAFKA produce message, i=0
 ---> FS WRITE, i=1
@@ -20,10 +20,10 @@ g++ -I. -O2 -Wall -Wextra -Werror examples/channel_and_waitgroup.cpp && ./a.out
 
 ### webserver
 
-Transform the io_uring webserver [example](https://unixism.net/loti/tutorial/webserver_liburing.html) into coroutines.
+Transform the io_uring webserver [example](https://unixism.net/loti/tutorial/webserver_liburing.html) into coroutines using C++20 coroutines.
 
 ```bash
-g++ -I. -ggdb -O2 -Wall -Wextra -Werror examples/webserver.cpp -luring -o examples/webserver && (cd examples/ && ./webserver)
+g++ -std=c++20 -I.. -ggdb -O2 -Wall -Wextra -Werror examples/webserver.cpp -luring -o examples/webserver && (cd examples/ && ./webserver)
 Minimum kernel version required is: 5.5
 Your kernel version is: 6.8
 ZeroHTTPd listening on port: 8000, fd=3
