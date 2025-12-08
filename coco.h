@@ -186,9 +186,14 @@ template <typename T> class chan_t
             if (ch->cap() == 0) {
                 // For unbuffered channels, put data in handoff queue
                 ch->handoff_q.push(data_);
+                is_waked_up_ = true;
+                ch->wq.push(handle);
+            } else {
+                // For buffered channels, buffer must be full if we reach here
+                // (because await_ready would have returned true if space was available)
+                is_waked_up_ = true;
+                ch->wq.push(handle);
             }
-            is_waked_up_ = true;
-            ch->wq.push(handle);
         }
 
         bool await_resume() noexcept
@@ -196,38 +201,43 @@ template <typename T> class chan_t
             if (ch->closed())
                 return false;
 
-            if (is_waked_up_) {
-                // We were woken up by a reader
-                if (ch->cap() == 0) {
-                    // For unbuffered channels, data was already put in handoff_q in await_suspend
-                    // and should have been consumed by the reader that woke us up
+            if (ch->cap() == 0) {
+                // Unbuffered channels
+                if (is_waked_up_) {
+                    // We were woken up by a reader, data should have been consumed
                     return true;
                 } else {
-                    // For buffered channels, add to buffer
+                    // Direct write without suspension (await_ready returned true)
+                    ch->handoff_q.push(data_);
+                    if (!ch->rq.empty()) {
+                        auto reader = ch->rq.front();
+                        ch->rq.pop();
+                        if (reader && !reader.done()) {
+                            scheduler_t::instance().schedule(reader);
+                        }
+                    }
+                    return true;
+                }
+            } else {
+                // Buffered channels
+                if (is_waked_up_) {
+                    // We were woken up by a reader, try to add to buffer
                     if (ch->dataq.size() < ch->cap()) {
                         ch->dataq.push(data_);
+                        // Wake up a waiting reader if any
+                        if (!ch->rq.empty()) {
+                            auto reader = ch->rq.front();
+                            ch->rq.pop();
+                            if (reader && !reader.done()) {
+                                scheduler_t::instance().schedule(reader);
+                            }
+                        }
                         return true;
                     }
-                    // Buffer is full, this shouldn't happen if logic is correct
+                    // Buffer is still full, this shouldn't happen
                     return false;
-                }
-            }
-
-            // Direct write without suspension (await_ready returned true)
-            if (ch->cap() == 0) {
-                // Unbuffered: direct handoff to waiting reader
-                ch->handoff_q.push(data_);
-                if (!ch->rq.empty()) {
-                    auto reader = ch->rq.front();
-                    ch->rq.pop();
-                    if (reader && !reader.done()) {
-                        scheduler_t::instance().schedule(reader);
-                    }
-                }
-                return true;
-            } else {
-                // Buffered: add to buffer
-                if (ch->dataq.size() < ch->cap()) {
+                } else {
+                    // Direct write without suspension (await_ready returned true)
                     ch->dataq.push(data_);
                     // Wake up a waiting reader if any
                     if (!ch->rq.empty()) {
@@ -239,7 +249,6 @@ template <typename T> class chan_t
                     }
                     return true;
                 }
-                return false; // Buffer full, shouldn't happen
             }
         }
 
