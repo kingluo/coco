@@ -67,14 +67,31 @@ struct co_t
 {
     struct promise_type
     {
+        std::queue<std::coroutine_handle<>> join_waiters;
+        bool completed = false;
+        std::exception_ptr exception = nullptr;
+
         co_t get_return_object()
         {
             return co_t{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         std::suspend_always initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept {
+            completed = true;
+            // Resume all waiting coroutines
+            while (!join_waiters.empty()) {
+                auto waiter = join_waiters.front();
+                join_waiters.pop();
+                if (waiter && !waiter.done()) {
+                    scheduler_t::instance().schedule(waiter);
+                }
+            }
+            return {};
+        }
         void return_void() {}
-        void unhandled_exception() { std::terminate(); }
+        void unhandled_exception() {
+            exception = std::current_exception();
+        }
         std::suspend_always yield_value(std::monostate) noexcept {
             // Schedule this coroutine for resumption
             auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
@@ -82,6 +99,30 @@ struct co_t
             return {};
         }
     };
+
+    struct join_awaiter
+    {
+        co_t* coro;
+
+        join_awaiter(co_t* c) : coro(c) {}
+
+        bool await_ready() const noexcept {
+            return !coro->handle || coro->handle.done() || coro->handle.promise().completed;
+        }
+
+        void await_suspend(std::coroutine_handle<> handle) noexcept {
+            if (coro->handle && !coro->handle.promise().completed) {
+                coro->handle.promise().join_waiters.push(handle);
+            }
+        }
+
+        void await_resume() {
+            if (coro->handle && coro->handle.promise().exception) {
+                std::rethrow_exception(coro->handle.promise().exception);
+            }
+        }
+    };
+
     std::coroutine_handle<promise_type> handle;
 
     co_t(std::coroutine_handle<promise_type> h) : handle(h) {}
@@ -102,6 +143,14 @@ struct co_t
     }
 
     void resume() { scheduler_t::instance().schedule(handle); }
+
+    // Join method to await coroutine completion
+    join_awaiter join() { return join_awaiter(this); }
+
+    // Utility method to check if coroutine is done
+    bool is_done() const {
+        return !handle || handle.done() || (handle && handle.promise().completed);
+    }
 };
 
 inline co_t go(std::function<co_t()> fn) {

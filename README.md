@@ -157,7 +157,9 @@ The fundamental coroutine type that wraps C++20 coroutine handles.
 
 ```cpp
 struct co_t {
-    void resume();  // Resume coroutine execution
+    void resume();                    // Resume coroutine execution
+    join_awaiter join();             // Await coroutine completion
+    bool is_done() const;            // Check if coroutine is completed
 
     // Move-only semantics
     co_t(co_t&& other) noexcept;
@@ -172,7 +174,15 @@ struct co_t {
 **Usage:**
 - Functions using `co_await`, `co_yield`, or `co_return` must return `co_t`
 - Use `co_yield {}` to yield control back to the scheduler (automatically resumes later)
+- Use `co_await coroutine.join()` to wait for a coroutine to complete
+- Use `coroutine.is_done()` to check if a coroutine has finished
 - Coroutines are automatically destroyed when `co_t` goes out of scope
+
+**Join Functionality:**
+The `join()` method allows you to await the completion of any coroutine:
+- **Exception Propagation**: If the joined coroutine throws an exception, it will be rethrown in the joining coroutine
+- **Multiple Joiners**: Multiple coroutines can join the same coroutine
+- **Immediate Return**: If the coroutine is already completed, `join()` returns immediately
 
 **Note:** `co_yield {}` now automatically schedules the coroutine for resumption, making it a true cooperative yielding mechanism. The coroutine will suspend and allow other coroutines to run, then automatically resume when the scheduler processes it.
 
@@ -304,15 +314,16 @@ scheduler.run();
 Since coco uses C++20 coroutines, there are some important usage patterns to follow:
 
 1. **Coroutine Functions**: Functions that use `co_await`, `co_yield`, or `co_return` must return `co_t`.
-2. **Awaitable Objects**: Use `co_await` with channel operations (`read()`, `write()`), waitgroup operations (`wait()`), or custom awaitables.
+2. **Awaitable Objects**: Use `co_await` with channel operations (`read()`, `write()`), waitgroup operations (`wait()`), coroutine join operations (`join()`), or custom awaitables.
 3. **Yielding**: Use `co_yield {}` to yield control back to the caller/scheduler.
 4. **Channel Operations**:
    - `co_await channel.read()` returns `std::optional<T>` (nullopt when channel is closed)
    - `co_await channel.write(value)` returns `bool` (false when channel is closed)
 5. **Waitgroups**: Use `wg.add(n)` to add work, `wg.done()` to mark completion, and `co_await wg.wait()` to wait for all work to finish.
-6. **Scheduler**: Use `scheduler_t` to manage multiple coroutines with fair round-robin scheduling.
-7. **Memory Management**: Channels, waitgroups, and scheduler are RAII objects - no manual deletion needed.
-7. **Exception Safety**: Exceptions can be used normally within coroutines.
+6. **Coroutine Join**: Use `co_await coroutine.join()` to wait for a specific coroutine to complete. Exceptions are automatically propagated.
+7. **Scheduler**: Use `scheduler_t` to manage multiple coroutines with fair round-robin scheduling.
+8. **Memory Management**: Channels, waitgroups, and scheduler are RAII objects - no manual deletion needed.
+9. **Exception Safety**: Exceptions can be used normally within coroutines and are properly propagated through join operations.
 
 ### Advanced Usage Patterns
 
@@ -394,6 +405,87 @@ co_t coordinator() {
         std::cout << result.value() << std::endl;
     }
 
+    co_return;
+}
+```
+
+#### Coroutine Join Operations
+
+The `join()` method provides a clean way to wait for coroutine completion without manual coordination:
+
+```cpp
+co_t worker_task(int id) {
+    std::cout << "Worker " << id << " starting" << std::endl;
+    co_yield {};  // Simulate async work
+    std::cout << "Worker " << id << " completed" << std::endl;
+    co_return;
+}
+
+co_t coordinator_with_join() {
+    // Start multiple tasks
+    auto task1 = go([]() -> co_t { return worker_task(1); });
+    auto task2 = go([]() -> co_t { return worker_task(2); });
+    auto task3 = go([]() -> co_t { return worker_task(3); });
+
+    // Wait for all tasks to complete
+    co_await task1.join();
+    co_await task2.join();
+    co_await task3.join();
+
+    std::cout << "All workers completed!" << std::endl;
+    co_return;
+}
+```
+
+**Exception Handling with Join:**
+```cpp
+co_t risky_task() {
+    co_yield {};
+    throw std::runtime_error("Something went wrong!");
+    co_return;
+}
+
+co_t error_handler() {
+    auto task = go(risky_task);
+
+    try {
+        co_await task.join();
+        std::cout << "Task completed successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Task failed: " << e.what() << std::endl;
+    }
+    co_return;
+}
+```
+
+**Multiple Joiners:**
+```cpp
+co_t shared_task() {
+    std::cout << "Shared task working..." << std::endl;
+    co_yield {};
+    std::cout << "Shared task done!" << std::endl;
+    co_return;
+}
+
+co_t multiple_joiners_example() {
+    auto task = go(shared_task);
+
+    // Multiple coroutines can join the same task
+    auto joiner1 = go([&task]() -> co_t {
+        co_await task.join();
+        std::cout << "Joiner 1 notified" << std::endl;
+        co_return;
+    });
+
+    auto joiner2 = go([&task]() -> co_t {
+        co_await task.join();
+        std::cout << "Joiner 2 notified" << std::endl;
+        co_return;
+    });
+
+    // Wait for all joiners to complete
+    co_await joiner1.join();
+    co_await joiner2.join();
     co_return;
 }
 ```
@@ -662,6 +754,18 @@ co_t producer(chan_t<T>& ch) {
 co_t worker(wg_t& wg) {
     // Do work...
     wg.done();
+    co_return;
+}
+
+// Worker with Join (simpler alternative to WaitGroup)
+co_t worker_task() {
+    // Do work...
+    co_return;
+}
+
+co_t coordinator() {
+    auto task = go(worker_task);
+    co_await task.join();  // Wait for completion
     co_return;
 }
 
