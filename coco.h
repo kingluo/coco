@@ -75,7 +75,12 @@ struct co_t
         std::suspend_always final_suspend() noexcept { return {}; }
         void return_void() {}
         void unhandled_exception() { std::terminate(); }
-        std::suspend_always yield_value(std::monostate) noexcept { return {}; }
+        std::suspend_always yield_value(std::monostate) noexcept {
+            // Schedule this coroutine for resumption
+            auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
+            scheduler_t::instance().schedule(handle);
+            return {};
+        }
     };
     std::coroutine_handle<promise_type> handle;
 

@@ -171,8 +171,10 @@ struct co_t {
 
 **Usage:**
 - Functions using `co_await`, `co_yield`, or `co_return` must return `co_t`
-- Use `co_yield {}` to yield control back to the scheduler
+- Use `co_yield {}` to yield control back to the scheduler (automatically resumes later)
 - Coroutines are automatically destroyed when `co_t` goes out of scope
+
+**Note:** `co_yield {}` now automatically schedules the coroutine for resumption, making it a true cooperative yielding mechanism. The coroutine will suspend and allow other coroutines to run, then automatically resume when the scheduler processes it.
 
 #### `chan_t<T>` - Channel Type
 
@@ -563,13 +565,13 @@ curl -i http://localhost:8000/tux.png
 
 ## Building and Running Tests
 
-The `tests/` directory contains comprehensive unit tests for all coco components:
+The `.tests/` directory contains comprehensive unit tests for all coco components:
 
 ### Quick Start
 
 ```bash
 # Build and run all tests
-cd tests/
+cd .tests/
 make test
 
 # Build all test executables
@@ -588,6 +590,8 @@ make run-integration # Test integration scenarios
 2. **test_chan_t.cpp** - Tests for channel operations, buffering, and closing
 3. **test_wg_t.cpp** - Tests for waitgroup synchronization primitives
 4. **test_integration.cpp** - Integration tests combining multiple components
+5. **test_cpp20_caveats.cpp** - Tests demonstrating C++20 coroutine limitations and best practices
+6. **test_advanced_caveats.cpp** - Advanced tests for coroutine behavior and edge cases
 
 ### Test Commands
 
