@@ -98,8 +98,10 @@ struct co_t
         void unhandled_exception() {
             exception = std::current_exception();
         }
+        // Explicit no-reschedule yield
         std::suspend_always yield_value(no_sched_t) noexcept { return {}; }
 
+        // Explicit reschedule yield - this is the default behavior for co_yield
         std::suspend_always yield_value(resched_t) noexcept {
             auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
             scheduler_t::instance().schedule(handle);

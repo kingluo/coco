@@ -173,7 +173,8 @@ struct co_t {
 
 **Usage:**
 - Functions using `co_await`, `co_yield`, or `co_return` must return `co_t`
-- Use `co_yield {}` to yield control back to the scheduler (automatically resumes later)
+- Use `co_yield resched` to yield control back to the scheduler (automatically resumes later)
+- Use `co_yield no_sched` to yield without automatic rescheduling (manual resume required)
 - Use `co_await coroutine.join()` to wait for a coroutine to complete
 - Use `coroutine.is_done()` to check if a coroutine has finished
 - Coroutines are automatically destroyed when `co_t` goes out of scope
@@ -184,7 +185,7 @@ The `join()` method allows you to await the completion of any coroutine:
 - **Multiple Joiners**: Multiple coroutines can join the same coroutine
 - **Immediate Return**: If the coroutine is already completed, `join()` returns immediately
 
-**Note:** `co_yield {}` now automatically schedules the coroutine for resumption, making it a true cooperative yielding mechanism. The coroutine will suspend and allow other coroutines to run, then automatically resume when the scheduler processes it.
+**Note:** `co_yield resched` automatically schedules the coroutine for resumption, making it a true cooperative yielding mechanism. The coroutine will suspend and allow other coroutines to run, then automatically resume when the scheduler processes it. Use `co_yield no_sched` if you need to yield without automatic rescheduling (requires manual resume).
 
 #### `chan_t<T>` - Channel Type
 
@@ -301,7 +302,7 @@ scheduler_t scheduler;
 // Add coroutines
 scheduler.spawn([]() -> co_t {
     // Your coroutine code
-    co_yield {}; // Yield to allow other coroutines to run
+    co_yield resched; // Yield to allow other coroutines to run
     co_return;
 });
 
@@ -315,7 +316,7 @@ Since coco uses C++20 coroutines, there are some important usage patterns to fol
 
 1. **Coroutine Functions**: Functions that use `co_await`, `co_yield`, or `co_return` must return `co_t`.
 2. **Awaitable Objects**: Use `co_await` with channel operations (`read()`, `write()`), waitgroup operations (`wait()`), coroutine join operations (`join()`), or custom awaitables.
-3. **Yielding**: Use `co_yield {}` to yield control back to the caller/scheduler.
+3. **Yielding**: Use `co_yield resched` to yield control back to the caller/scheduler with automatic rescheduling, or `co_yield no_sched` to yield without automatic rescheduling.
 4. **Channel Operations**:
    - `co_await channel.read()` returns `std::optional<T>` (nullopt when channel is closed)
    - `co_await channel.write(value)` returns `bool` (false when channel is closed)
@@ -345,7 +346,7 @@ co_t consumer(chan_t<int>& ch, const std::string& name) {
         if (!result.has_value()) break;  // Channel closed
 
         std::cout << name << " processed: " << result.value() << std::endl;
-        co_yield {};  // Yield to other coroutines
+        co_yield resched;  // Yield to other coroutines
     }
     co_return;
 }
@@ -373,7 +374,7 @@ int main() {
 co_t worker(int id, wg_t& wg, chan_t<std::string>& results) {
     // Simulate work
     for (int i = 0; i < 3; i++) {
-        co_yield {};  // Simulate async work
+        co_yield resched;  // Simulate async work
     }
 
     // Report result
@@ -416,7 +417,7 @@ The `join()` method provides a clean way to wait for coroutine completion withou
 ```cpp
 co_t worker_task(int id) {
     std::cout << "Worker " << id << " starting" << std::endl;
-    co_yield {};  // Simulate async work
+    co_yield resched;  // Simulate async work
     std::cout << "Worker " << id << " completed" << std::endl;
     co_return;
 }
@@ -440,7 +441,7 @@ co_t coordinator_with_join() {
 **Exception Handling with Join:**
 ```cpp
 co_t risky_task() {
-    co_yield {};
+    co_yield resched;
     throw std::runtime_error("Something went wrong!");
     co_return;
 }
@@ -462,7 +463,7 @@ co_t error_handler() {
 ```cpp
 co_t shared_task() {
     std::cout << "Shared task working..." << std::endl;
-    co_yield {};
+    co_yield resched;
     std::cout << "Shared task done!" << std::endl;
     co_return;
 }
@@ -576,13 +577,13 @@ co_t resource_safe_coroutine() {
    - Small buffer (1-10): Use for loose coupling
    - Large buffer (100+): Use for high-throughput scenarios
 
-2. **Yielding Strategy**: Use `co_yield {}` to prevent coroutine starvation
+2. **Yielding Strategy**: Use `co_yield resched` to prevent coroutine starvation
    ```cpp
    co_t cpu_intensive_task() {
        for (int i = 0; i < 1000000; i++) {
            // Do work...
            if (i % 1000 == 0) {
-               co_yield {};  // Yield periodically
+               co_yield resched;  // Yield periodically
            }
        }
        co_return;
@@ -710,7 +711,7 @@ using namespace coco;
 ```cpp
 co_t my_coroutine() {
     // Coroutine body
-    co_yield {};        // Yield control
+    co_yield resched;   // Yield control (with automatic rescheduling)
     co_return;          // End coroutine
 }
 ```
