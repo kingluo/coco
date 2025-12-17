@@ -418,12 +418,11 @@ public:
     async_wait_t wait() { return async_wait_t(this); }
 };
 
-class wg_guard_t
-{
+class wg_guard_t {
     wg_t *wg;
 
 public:
-    wg_guard_t(wg_t *wg) : wg(wg) { wg->add(); }
+    wg_guard_t(wg_t *wg) : wg(wg) {}
     ~wg_guard_t() { wg->done(); }
 };
 } // namespace coco
