@@ -63,6 +63,12 @@ struct scheduler_t {
     }
 };
 
+struct resched_t {};
+inline static constexpr resched_t resched{};
+
+struct no_sched_t {};
+inline static constexpr no_sched_t no_sched{};
+
 struct co_t
 {
     struct promise_type
@@ -92,8 +98,9 @@ struct co_t
         void unhandled_exception() {
             exception = std::current_exception();
         }
-        std::suspend_always yield_value(std::monostate) noexcept {
-            // Schedule this coroutine for resumption
+        std::suspend_always yield_value(no_sched_t) noexcept { return {}; }
+
+        std::suspend_always yield_value(resched_t) noexcept {
             auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
             scheduler_t::instance().schedule(handle);
             return {};
