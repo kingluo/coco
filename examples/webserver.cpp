@@ -496,6 +496,7 @@ co_t server_coroutine(int server_socket) {
 
         // Start a new coroutine to handle this connection and store it
         active_connections.emplace_back(handle_connection(client_socket));
+        active_connections.back().resume();
 
         // Clean up completed connections
         active_connections.remove_if([](const co_t& conn) {
@@ -506,6 +507,9 @@ co_t server_coroutine(int server_socket) {
 
 void server_loop(int server_socket) {
     auto server_coro = server_coroutine(server_socket);
+    // Start the server coroutine
+    server_coro.resume();
+    scheduler_t::instance().run();
 
     while (true) {
         struct io_uring_cqe *cqe;
@@ -532,14 +536,12 @@ void server_loop(int server_socket) {
         iouring_awaiter *awaiter = (iouring_awaiter*)cqe->user_data;
         awaiter->res = cqe->res;
         if (awaiter->handle) {
-            awaiter->handle.resume();
+            scheduler_t::instance().schedule(awaiter->handle);
         }
         io_uring_cqe_seen(&ring, cqe);
 
-        // Resume server coroutine
-        if (server_coro.handle && !server_coro.handle.done()) {
-            server_coro.resume();
-        }
+        // Run the scheduler to process all scheduled coroutines
+        scheduler_t::instance().run();
     }
 }
 
