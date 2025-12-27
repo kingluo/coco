@@ -1,9 +1,9 @@
-#include <iostream>
 #include "../coco.h"
+#include <iostream>
 
 using namespace coco;
 
-co_t producer(chan_t<int>& ch) {
+co_t producer(chan_t<int> &ch) {
     for (int i = 0; i < 3; i++) {
         std::cout << "Sending: " << i << std::endl;
         bool ok = co_await ch.write(i);
@@ -16,7 +16,7 @@ co_t producer(chan_t<int>& ch) {
     std::cout << "Producer finished" << std::endl;
 }
 
-co_t consumer(chan_t<int>& ch, const std::string& name) {
+co_t consumer(chan_t<int> &ch, const std::string &name) {
     while (true) {
         auto result = co_await ch.read();
         if (result.has_value()) {
@@ -60,7 +60,8 @@ int main() {
             break;
         }
 
-        if (!any_active) break;
+        if (!any_active)
+            break;
     }
 
     std::cout << "---> ALL DONE! check errors if any." << std::endl;

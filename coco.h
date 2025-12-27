@@ -160,6 +160,11 @@ struct co_t
     bool is_done() const {
         return !handle || handle.done() || (handle && handle.promise().completed);
     }
+
+    // get exception which is captured in unhandled_exception
+    std::exception_ptr get_exception() const {
+        return handle ? handle.promise().exception : nullptr;
+    }
 };
 
 inline co_t go(std::function<co_t()> fn) {
@@ -197,7 +202,15 @@ template <typename T> class chan_t
             if (!ch->dataq.empty()) {
                 auto data = ch->dataq.front();
                 ch->dataq.pop();
-                wake_up_writer();
+
+                // Direct handoff: if there are waiting writers, move their data to buffer
+                if (!ch->handoff_q.empty()) {
+                    auto writer_data = ch->handoff_q.front();
+                    ch->handoff_q.pop();
+                    ch->dataq.push(writer_data);
+                    wake_up_writer();
+                }
+
                 return data;
             }
             // Channel is closed and empty
@@ -238,10 +251,11 @@ template <typename T> class chan_t
 
         void await_suspend(std::coroutine_handle<> handle) noexcept
         {
-            if (ch->cap() == 0) {
-                // For unbuffered channels, put data in handoff queue
-                ch->handoff_q.push(data_);
-            }
+            // Put data in handoff queue for both unbuffered and buffered channels
+            // For unbuffered: always use handoff
+            // For buffered: use handoff when buffer is full (writer is suspending)
+            ch->handoff_q.push(data_);
+
             // Common logic for both buffered and unbuffered channels
             is_waked_up_ = true;
             ch->wq.push(handle);
@@ -266,14 +280,10 @@ template <typename T> class chan_t
             } else {
                 // Buffered channels
                 if (is_waked_up_) {
-                    // We were woken up by a reader, try to add to buffer
-                    if (ch->dataq.size() < ch->cap()) {
-                        ch->dataq.push(data_);
-                        wake_up_reader();
-                        return true;
-                    }
-                    // Buffer is still full, this shouldn't happen
-                    return false;
+                    // We were woken up by a reader
+                    // Our data was already moved to buffer via direct handoff
+                    // No need to check buffer size or add data again
+                    return true;
                 } else {
                     // Direct write without suspension (await_ready returned true)
                     ch->dataq.push(data_);

@@ -1,0 +1,7 @@
+---
+BasedOnStyle: LLVM
+AlignEscapedNewlines: Left
+AccessModifierOffset: -4
+IndentWidth: 4
+ReflowComments: true
+ColumnLimit: 100

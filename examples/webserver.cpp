@@ -1,21 +1,18 @@
-#include <stdio.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <liburing.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/utsname.h>
-#include <errno.h>
 #include <array>
-#include <iostream>
-#include <memory>
-#include <vector>
-#include <algorithm>
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <liburing.h>
 #include <list>
+#include <memory>
+#include <netinet/in.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/utsname.h>
+#include <unistd.h>
 
 #include "../coco.h"
 using namespace coco;
@@ -56,13 +53,13 @@ struct conn_state_t {
     }
 };
 
-#define SERVER_STRING           "Server: zerohttpd/0.1\r\n"
-#define DEFAULT_SERVER_PORT     8000
-#define QUEUE_DEPTH             256
-#define READ_SZ                 8192
+#define SERVER_STRING "Server: zerohttpd/0.1\r\n"
+#define DEFAULT_SERVER_PORT 8000
+#define QUEUE_DEPTH 256
+#define READ_SZ 8192
 
-#define MIN_KERNEL_VERSION      5
-#define MIN_MAJOR_VERSION       5
+#define MIN_KERNEL_VERSION 5
+#define MIN_MAJOR_VERSION 5
 
 struct io_uring ring;
 
@@ -70,33 +67,33 @@ struct io_uring ring;
 // Use list to avoid reallocation issues that would invalidate coroutine handles
 std::list<co_t> active_connections;
 
-const char *unimplemented_content = \
-                                "HTTP/1.0 400 Bad Request\r\n"
-                                "Content-type: text/html\r\n"
-                                "\r\n"
-                                "<html>"
-                                "<head>"
-                                "<title>ZeroHTTPd: Unimplemented</title>"
-                                "</head>"
-                                "<body>"
-                                "<h1>Bad Request (Unimplemented)</h1>"
-                                "<p>Your client sent a request ZeroHTTPd did not understand and it is probably not your fault.</p>"
-                                "</body>"
-                                "</html>";
+const char *unimplemented_content = "HTTP/1.0 400 Bad Request\r\n"
+                                    "Content-type: text/html\r\n"
+                                    "\r\n"
+                                    "<html>"
+                                    "<head>"
+                                    "<title>ZeroHTTPd: Unimplemented</title>"
+                                    "</head>"
+                                    "<body>"
+                                    "<h1>Bad Request (Unimplemented)</h1>"
+                                    "<p>Your client sent a request ZeroHTTPd did not understand "
+                                    "and it is probably not your fault.</p>"
+                                    "</body>"
+                                    "</html>";
 
-const char *http_404_content = \
-                                "HTTP/1.0 404 Not Found\r\n"
-                                "Content-type: text/html\r\n"
-                                "\r\n"
-                                "<html>"
-                                "<head>"
-                                "<title>ZeroHTTPd: Not Found</title>"
-                                "</head>"
-                                "<body>"
-                                "<h1>Not Found (404)</h1>"
-                                "<p>Your client is asking for an object that was not found on this server.</p>"
-                                "</body>"
-                                "</html>";
+const char *http_404_content =
+    "HTTP/1.0 404 Not Found\r\n"
+    "Content-type: text/html\r\n"
+    "\r\n"
+    "<html>"
+    "<head>"
+    "<title>ZeroHTTPd: Not Found</title>"
+    "</head>"
+    "<body>"
+    "<h1>Not Found (404)</h1>"
+    "<p>Your client is asking for an object that was not found on this server.</p>"
+    "</body>"
+    "</html>";
 
 /*
  One function that prints the system call and the error details
@@ -111,7 +108,7 @@ int check_kernel_version() {
     struct utsname buffer;
     char *p;
     long ver[16];
-    int i=0;
+    int i = 0;
 
     if (uname(&buffer) != 0) {
         perror("uname");
@@ -128,23 +125,21 @@ int check_kernel_version() {
             p++;
         }
     }
-    printf("Minimum kernel version required is: %d.%d\n",
-            MIN_KERNEL_VERSION, MIN_MAJOR_VERSION);
-    if (ver[0] >= MIN_KERNEL_VERSION && ver[1] >= MIN_MAJOR_VERSION ) {
+    printf("Minimum kernel version required is: %d.%d\n", MIN_KERNEL_VERSION, MIN_MAJOR_VERSION);
+    if (ver[0] >= MIN_KERNEL_VERSION && ver[1] >= MIN_MAJOR_VERSION) {
         printf("Your kernel version is: %ld.%ld\n", ver[0], ver[1]);
         return 0;
     }
-    fprintf(stderr, "Error: your kernel version is: %ld.%ld\n",
-                    ver[0], ver[1]);
+    fprintf(stderr, "Error: your kernel version is: %ld.%ld\n", ver[0], ver[1]);
     return 1;
 }
 
 void check_for_index_file() {
     struct stat st;
     int ret = stat("public/index.html", &st);
-    if(ret < 0 ) {
+    if (ret < 0) {
         fprintf(stderr, "ZeroHTTPd needs the \"public\" directory to be "
-                "present in the current directory.\n");
+                        "present in the current directory.\n");
         fatal_error("stat: public/index.html");
     }
 }
@@ -184,11 +179,8 @@ int setup_listening_socket(int port) {
         fatal_error("socket()");
 
     int enable = 1;
-    if (setsockopt(sock,
-                   SOL_SOCKET, SO_REUSEADDR,
-                   &enable, sizeof(int)) < 0)
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
         fatal_error("setsockopt(SO_REUSEADDR)");
-
 
     memset(&srv_addr, 0, sizeof(srv_addr));
     srv_addr.sin_family = AF_INET;
@@ -198,9 +190,7 @@ int setup_listening_socket(int port) {
     /* We bind to a port and turn this socket into a listening
      * socket.
      * */
-    if (bind(sock,
-             (const struct sockaddr *)&srv_addr,
-             sizeof(srv_addr)) < 0)
+    if (bind(sock, (const struct sockaddr *)&srv_addr, sizeof(srv_addr)) < 0)
         fatal_error("bind()");
 
     if (listen(sock, 10) < 0)
@@ -212,17 +202,16 @@ int setup_listening_socket(int port) {
 // Global awaiter for accept operations
 iouring_awaiter accept_awaiter;
 
-iouring_awaiter& do_accept(int server_socket, struct sockaddr_in *client_addr,
-                         socklen_t *client_addr_len) {
+iouring_awaiter &do_accept(int server_socket, struct sockaddr_in *client_addr,
+                           socklen_t *client_addr_len) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_accept(sqe, server_socket,
-            (struct sockaddr *) client_addr, client_addr_len, 0);
+    io_uring_prep_accept(sqe, server_socket, (struct sockaddr *)client_addr, client_addr_len, 0);
     io_uring_sqe_set_data(sqe, &accept_awaiter);
     io_uring_submit(&ring);
     return accept_awaiter;
 }
 
-iouring_awaiter& read_request(conn_state_t *req) {
+iouring_awaiter &read_request(conn_state_t *req) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     req->iov[0].iov_base = malloc(READ_SZ);
     req->iov[0].iov_len = READ_SZ;
@@ -234,7 +223,7 @@ iouring_awaiter& read_request(conn_state_t *req) {
     return req->read_awaiter;
 }
 
-iouring_awaiter& send_response(conn_state_t *req) {
+iouring_awaiter &send_response(conn_state_t *req) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     io_uring_prep_writev(sqe, req->client_socket, req->iov.data(), req->iovec_count, 0);
     io_uring_sqe_set_data(sqe, &req->write_awaiter);
@@ -265,9 +254,7 @@ void handle_unimplemented_method(conn_state_t *req) {
  * case the file requested is not found.
  * */
 
-void handle_http_404(conn_state_t *req) {
-    _send_static_string_content(http_404_content, req);
-}
+void handle_http_404(conn_state_t *req) { _send_static_string_content(http_404_content, req); }
 
 /*
  * Once a static file is identified to be served, this function is used to read the file
@@ -278,7 +265,7 @@ void handle_http_404(conn_state_t *req) {
 void copy_file_contents(char *file_path, off_t file_size, struct iovec *iov) {
     int fd;
 
-    char *buf = (char*)zh_malloc(file_size);
+    char *buf = (char *)zh_malloc(file_size);
     fd = open(file_path, O_RDONLY);
     if (fd < 0)
         fatal_error("read");
@@ -389,8 +376,7 @@ void handle_get_method(char *path, conn_state_t *req) {
         strcpy(final_path, "public");
         strcat(final_path, path);
         strcat(final_path, "index.html");
-    }
-    else {
+    } else {
         strcpy(final_path, "public");
         strcat(final_path, path);
     }
@@ -401,8 +387,7 @@ void handle_get_method(char *path, conn_state_t *req) {
     if (stat(final_path, &path_stat) == -1) {
         printf("404 Not Found: %s (%s)\n", final_path, path);
         handle_http_404(req);
-    }
-    else {
+    } else {
         /* Check if this is a normal/regular file and not a directory or something else */
         if (S_ISREG(path_stat.st_mode)) {
             req->reset();
@@ -410,8 +395,7 @@ void handle_get_method(char *path, conn_state_t *req) {
             send_headers(final_path, path_stat.st_size, req->iov.data());
             copy_file_contents(final_path, path_stat.st_size, &req->iov[5]);
             printf("200 %s %ld bytes\n", final_path, path_stat.st_size);
-        }
-        else {
+        } else {
             handle_http_404(req);
             printf("404 Not Found: %s\n", final_path);
         }
@@ -433,8 +417,7 @@ void handle_http_method(char *method_buffer, conn_state_t *req) {
 
     if (strcmp(method, "get") == 0) {
         handle_get_method(path, req);
-    }
-    else {
+    } else {
         handle_unimplemented_method(req);
     }
 }
@@ -442,7 +425,7 @@ void handle_http_method(char *method_buffer, conn_state_t *req) {
 int get_line(const char *src, char *dest, int dest_sz) {
     for (int i = 0; i < dest_sz; i++) {
         dest[i] = src[i];
-        if (src[i] == '\r' && src[i+1] == '\n') {
+        if (src[i] == '\r' && src[i + 1] == '\n') {
             dest[i] = '\0';
             return 0;
         }
@@ -453,7 +436,7 @@ int get_line(const char *src, char *dest, int dest_sz) {
 int handle_request(conn_state_t *req) {
     char http_request[1024];
     /* Get the first line, which will be the request */
-    if(get_line((char*)req->iov[0].iov_base, http_request, sizeof(http_request))) {
+    if (get_line((char *)req->iov[0].iov_base, http_request, sizeof(http_request))) {
         fprintf(stderr, "Malformed request\n");
         exit(1);
     }
@@ -499,9 +482,7 @@ co_t server_coroutine(int server_socket) {
         active_connections.back().resume();
 
         // Clean up completed connections
-        active_connections.remove_if([](const co_t& conn) {
-            return conn.handle.done();
-        });
+        active_connections.remove_if([](const co_t &conn) { return conn.handle.done(); });
     }
 }
 
@@ -533,7 +514,7 @@ void server_loop(int server_socket) {
             }
         }
 
-        iouring_awaiter *awaiter = (iouring_awaiter*)cqe->user_data;
+        iouring_awaiter *awaiter = (iouring_awaiter *)cqe->user_data;
         awaiter->res = cqe->res;
         if (awaiter->handle) {
             scheduler_t::instance().schedule(awaiter->handle);

@@ -1,20 +1,49 @@
 # coco
 
-coco is a simple stackless, single-threaded, and header-only C++20 coroutine library.
+A simple, stackless, single-threaded, header-only C++20 coroutine library with Go-like concurrency primitives.
 
-## Design
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-1. Uses C++20 coroutines for native async/await support.
-2. Header-only library with no external dependencies.
-3. Stackless coroutines with cooperative async/await semantics.
-4. Channel and waitgroup primitives like Go.
-5. Single-threaded, no locks required.
-6. Minimal performance overhead.
-7. Simple scheduler for managing multiple coroutines.
+## Overview
+
+**coco** is a lightweight C++20 coroutine library that brings Go-style concurrency to C++. With just **418 lines of code** in a single header file, it provides:
+
+- 🚀 **Native C++20 coroutines** - Leverages standard C++20 coroutine support
+- 📦 **Header-only** - Just include `coco.h`, no linking required
+- 🔄 **Go-like primitives** - Channels (`chan_t`) and wait groups (`wg_t`)
+- ⚡ **Zero dependencies** - Only requires C++20 standard library
+- 🎯 **Single-threaded** - No locks, no data races, cooperative multitasking
+- 🔧 **Simple scheduler** - FIFO queue-based coroutine scheduling
+- 🎨 **Clean API** - Intuitive async/await syntax
+
+## Comparison with Other Libraries
+
+| Feature | coco | cppcoro | Boost.Asio | libco |
+|---------|------|---------|------------|-------|
+| C++20 Coroutines | ✅ | ✅ | ✅ | ❌ |
+| Header-only | ✅ | ❌ | ❌ | ❌ |
+| Zero dependencies | ✅ | ❌ | ❌ | ✅ |
+| Lines of code | 418 | ~10K | ~100K | ~1K |
+| Go-like channels | ✅ | ❌ | ❌ | ❌ |
+| Wait groups | ✅ | ❌ | ❌ | ❌ |
+| Single-threaded | ✅ | ❌ | ❌ | ✅ |
+| Stackless | ✅ | ✅ | ✅ | ❌ |
+
+## Key Features
+
+- **Coroutines (`co_t`)** - Stackless coroutines with join support and exception propagation
+- **Channels (`chan_t<T>`)** - Type-safe communication channels (buffered and unbuffered)
+- **Wait Groups (`wg_t`)** - Synchronization primitive for coordinating multiple coroutines
+- **Custom Awaiters** - Easy integration with external async systems (io_uring, timers, etc.)
+- **RAII-friendly** - Proper resource management across suspension points
+- **Extensively tested** - Comprehensive test suite with 20+ test files
 
 ## Requirements
 
-- C++20 compiler with coroutine support (GCC 10+, Clang 14+, MSVC 2019+)
+- **C++20 compiler** with coroutine support:
+  - GCC 10+ (with `-std=c++20 -fcoroutines`)
+  - Clang 14+ (with `-std=c++20`)
+  - MSVC 2019+ (with `/std:c++20`)
 - Standard library with `<coroutine>` header support
 
 ## Synopsis
@@ -33,9 +62,10 @@ co_t simple_task(int id) {
     co_return;
 }
 
-// 2. Use go() to start a coroutine immediately
+// 2. Start and run coroutines
 int main() {
-    auto task = go([]() -> co_t { return simple_task(1); });
+    auto task = simple_task(1);  // Create the coroutine
+    task.resume();               // Schedule it for execution
 
     // 3. Must use scheduler to run all coroutines
     scheduler_t::instance().run();
@@ -44,9 +74,40 @@ int main() {
 }
 ```
 
-### Using Join to Stitch Multiple Coroutines
+### Using Join to Compose Multiple Coroutines
 
-C++20 coroutines require that coroutine keywords (`co_await`, `co_yield`, `co_return`) appear directly in the coroutine function body, not in nested function calls. This means you cannot split a large coroutine into helper functions that use `co_await`. Instead, use `join()` to stitch multiple coroutines together in a tail-call style.
+C++20 coroutines have a fundamental limitation: **you cannot directly call one coroutine from another and await its result**. This is because coroutine keywords (`co_await`, `co_yield`, `co_return`) must appear directly in the coroutine function body.
+
+**What DOESN'T Work:**
+```cpp
+co_t authenticate_user(const std::string& username) {
+    std::cout << "Authenticating " << username << "..." << std::endl;
+    co_yield resched;
+    std::cout << "Authentication successful" << std::endl;
+    co_return;
+}
+
+// ❌ This FAILS - mixing return with coroutine keywords
+co_t handle_request_WRONG(const std::string& username) {
+    if (username.empty()) {
+        return authenticate_user(username);  // Compilation error!
+        // Error: cannot use 'return' in a coroutine (must use co_return)
+    }
+    co_yield resched;  // This makes the function a coroutine
+    co_return;
+}
+
+// ❌ This also FAILS - cannot directly await a function call
+co_t handle_request_ALSO_WRONG(const std::string& username) {
+    co_await authenticate_user(username);  // Doesn't work as expected!
+    // The coroutine is created but never scheduled/resumed
+    co_return;
+}
+```
+
+**What DOES Work - Using `join()`:**
+
+The `join()` method allows you to properly compose coroutines by starting them and waiting for completion:
 
 ```cpp
 // Step 1: Authenticate user
@@ -73,19 +134,12 @@ co_t process_request(const std::string& request) {
     co_return;
 }
 
-// Main coroutine: stitch steps together using join (tail-call style)
+// ✅ Correct: Use join() to compose coroutines
 co_t handle_user_request(const std::string& username, int user_id, const std::string& request) {
-    // Step 1: Authenticate
-    auto auth = go([&](){ return authenticate_user(username); });
-    co_await auth.join();  // Wait for authentication to complete
-
-    // Step 2: Load data
-    auto load = go([&](){ return load_user_data(user_id); });
-    co_await load.join();  // Wait for data loading to complete
-
-    // Step 3: Process
-    auto process = go([&](){ return process_request(request); });
-    co_await process.join();  // Wait for processing to complete
+    // Shortcut: use go().join() to create, schedule, and join in one expression
+    co_await go([&](){ return authenticate_user(username); }).join();
+    co_await go([&](){ return load_user_data(user_id); }).join();
+    co_await go([&](){ return process_request(request); }).join();
 
     std::cout << "All steps completed!" << std::endl;
     co_return;
@@ -100,10 +154,12 @@ int main() {
 ```
 
 **Why Join is Needed:**
-- You **cannot** call a function that uses `co_await` from a regular function
-- You **cannot** extract coroutine logic into helper functions and call them
-- You **can** split logic into separate coroutine functions and use `join()` to compose them
-- This is similar to tail-call style: each step is a separate coroutine, joined sequentially
+- You **cannot** return a coroutine from another coroutine (compilation error)
+- You **cannot** directly `co_await` a coroutine function call without scheduling it first
+- You **must** create the coroutine, schedule it with `resume()`, then `co_await` its `join()`
+- **Shortcut pattern**: Use `co_await go(...).join()` to create, schedule, and join in one expression
+- This pattern allows sequential composition of independent coroutines
+- Each coroutine runs independently and can be joined when its result is needed
 
 ### Producer-Consumer with Channels
 
@@ -185,7 +241,86 @@ int main() {
 }
 ```
 
+## Installation
 
+**coco** is a header-only library. Simply copy `coco.h` to your project:
+
+```bash
+# Clone the repository
+git clone https://github.com/kingluo/coco.git
+
+# Copy the header to your project
+cp coco/coco.h /path/to/your/project/
+```
+
+Or include it directly:
+```cpp
+#include "path/to/coco.h"
+```
+
+## Examples
+
+The `examples/` directory contains practical demonstrations:
+
+### 1. Channel and Wait Group (`channel_and_waitgroup.cpp`)
+Producer-consumer pattern with channels and scheduler usage.
+
+### 2. Coroutine Join (`join_example.cpp`)
+Demonstrates coroutine composition, join functionality, and exception handling.
+
+### 3. Web Server (`webserver.cpp`)
+High-performance HTTP server using io_uring for async I/O with custom awaiters.
+
+### Building Examples
+
+```bash
+# Build all examples
+make examples
+
+# Or build individually
+cd examples/
+make
+
+# Run examples
+../build/channel_and_waitgroup
+../build/join_example
+
+# Run webserver (requires liburing)
+make run-webserver
+
+# Test webserver (in another terminal)
+curl -i http://localhost:8000
+```
+
+## Testing
+
+The library includes a comprehensive test suite with 20+ test files covering:
+
+- Core components (`co_t`, `chan_t`, `wg_t`)
+- Integration tests (producer-consumer, pipelines, fan-out/fan-in)
+- Channel behavior (Go compatibility, fair distribution, stress tests)
+- C++20 coroutine caveats (RAII, stack relocation, lifetime management)
+- Bug fixes and edge cases
+
+### Running Tests
+
+```bash
+# Run all tests
+make test
+
+# Or run specific test categories
+cd tests/
+make run-core-tests      # Core library tests
+make run-channel-tests   # Channel behavior tests
+make run-wg-tests        # Wait group tests
+
+# Run individual tests
+make run-co-t
+make run-chan-t
+make run-integration
+```
+
+See [`tests/README.md`](tests/README.md) for detailed test documentation.
 
 ## API Reference
 
@@ -199,9 +334,10 @@ The fundamental coroutine type that wraps C++20 coroutine handles.
 struct co_t {
     std::coroutine_handle<promise_type> handle;  // Underlying coroutine handle
 
-    void resume();                    // Schedule coroutine for execution
-    join_awaiter join();             // Await coroutine completion
-    bool is_done() const;            // Check if coroutine is completed
+    void resume();                         // Schedule coroutine for execution
+    join_awaiter join();                   // Await coroutine completion
+    bool is_done() const;                  // Check if coroutine is completed
+    std::exception_ptr get_exception() const;  // Get captured exception (if any)
 
     // Move-only semantics
     co_t(co_t&& other) noexcept;
@@ -217,6 +353,7 @@ struct co_t {
 - **`resume()`**: Schedules the coroutine for execution via `scheduler_t::instance().schedule(handle)`. Does not execute immediately; the coroutine runs when the scheduler processes it.
 - **`join()`**: Returns a `join_awaiter` that can be used with `co_await` to wait for the coroutine to complete.
 - **`is_done()`**: Returns `true` if the coroutine has finished execution.
+- **`get_exception()`**: Returns the `std::exception_ptr` captured by `unhandled_exception()` if the coroutine threw an exception, or `nullptr` if no exception occurred.
 
 **Usage:**
 - Functions using `co_await`, `co_yield`, or `co_return` must return `co_t`
@@ -231,6 +368,32 @@ The `join()` method allows you to await the completion of any coroutine:
 - **Exception Propagation**: If the joined coroutine throws an exception, it will be rethrown in the joining coroutine
 - **Multiple Joiners**: Multiple coroutines can join the same coroutine
 - **Immediate Return**: If the coroutine is already completed, `join()` returns immediately
+
+**Exception Handling:**
+Coroutines support standard C++ exception handling:
+- Exceptions thrown in a coroutine are captured by `unhandled_exception()` in the promise
+- Use `co_await coroutine.join()` to automatically propagate exceptions to the joining coroutine
+- Use `coroutine.get_exception()` to manually check for exceptions without rethrowing
+- Example:
+  ```cpp
+  co_t worker() {
+      throw std::runtime_error("Worker failed!");
+      co_return;
+  }
+
+  co_t supervisor() {
+      auto w = worker();
+      w.resume();
+      scheduler_t::instance().run();
+
+      // Check for exception without rethrowing
+      if (auto ex = w.get_exception()) {
+          std::cout << "Worker threw an exception" << std::endl;
+          // Handle error...
+      }
+      co_return;
+  }
+  ```
 
 **Note:** `co_yield resched` automatically schedules the coroutine for resumption, making it a true cooperative yielding mechanism. The coroutine will suspend and allow other coroutines to run, then automatically resume when the scheduler processes it. Use `co_yield no_sched` if you need to yield without automatic rescheduling (requires manual resume).
 
@@ -249,9 +412,18 @@ return co;
 
 **Example:**
 ```cpp
+co_t simple_task(int id) {
+    std::cout << "Task " << id << std::endl;
+    co_return;
+}
+
+// Use go() to create and immediately schedule a coroutine
 auto task = go([](){ return simple_task(1); });
 // task is now scheduled and will run when scheduler processes it
+scheduler_t::instance().run();
 ```
+
+**Note:** The lambda passed to `go()` is a regular function (not a coroutine) that returns a coroutine. This is valid because the lambda itself doesn't use coroutine keywords - it just calls `simple_task()` which creates and returns a `co_t`.
 
 #### `chan_t<T>` - Channel Type
 
@@ -587,25 +759,19 @@ co_t resource_safe_coroutine() {
     std::unique_ptr<int> resource = std::make_unique<int>(42);
     chan_t<int> local_channel(5);
 
-    // Resources are automatically cleaned up when coroutine ends
-    // even if suspended and resumed multiple times
+    // IMPORTANT: Resources remain alive during co_await/co_yield suspension
+    // They are only destroyed when the coroutine function actually returns
+    co_await local_channel.write(*resource);  // resource still valid here
+    auto result = co_await local_channel.read();  // and here
 
-    co_await local_channel.write(*resource);
-    auto result = co_await local_channel.read();
-
-    // resource and local_channel automatically destroyed
+    // Resources destroyed only when coroutine completes (co_return)
     co_return;
 }
 ```
 
 #### Performance Tips
 
-1. **Channel Sizing**: Choose appropriate buffer sizes
-   - Unbuffered (0): Use for synchronization points
-   - Small buffer (1-10): Use for loose coupling
-   - Large buffer (100+): Use for high-throughput scenarios
-
-2. **Yielding Strategy**: Use `co_yield resched` to prevent coroutine starvation
+1. **Yielding Strategy**: Use `co_yield resched` to prevent coroutine starvation
    ```cpp
    co_t cpu_intensive_task() {
        for (int i = 0; i < 1000000; i++) {
@@ -618,7 +784,7 @@ co_t resource_safe_coroutine() {
    }
    ```
 
-3. **Memory Efficiency**: Prefer move semantics for large objects
+2. **Memory Efficiency**: Prefer move semantics for large objects
    ```cpp
    co_t efficient_data_transfer(chan_t<std::vector<int>>& ch) {
        std::vector<int> large_data(10000);
@@ -627,88 +793,3 @@ co_t resource_safe_coroutine() {
        co_return;
    }
    ```
-
-## Building and Running Examples
-
-The `examples/` directory contains practical demonstrations of coco's features:
-
-### Available Examples
-
-1. **channel_and_waitgroup.cpp** - Demonstrates channel communication between producer/consumer coroutines with scheduler usage
-2. **join_example.cpp** - Demonstrates coroutine join functionality, exception handling, and coordination
-3. **webserver.cpp** - HTTP server using io_uring for async I/O operations with custom awaiters
-
-### Building
-
-```bash
-cd examples/
-
-# Build all examples
-make
-
-# Build specific examples
-make channel_and_waitgroup
-make join_example
-make webserver
-```
-
-### Running
-
-```bash
-# Run examples directly
-./channel_and_waitgroup
-./join_example
-
-# Run webserver (use Ctrl+C to stop)
-make run-webserver
-
-# Test webserver with curl (in another terminal)
-curl -i http://localhost:8000
-```
-
-## Building and Running Tests
-
-The `.tests/` directory contains comprehensive unit tests for all coco components:
-
-### Quick Start
-
-```bash
-# Build and run all tests
-cd .tests/
-make test
-
-# Build all test executables
-make all
-
-# Run individual test suites
-make run-co-t        # Test co_t coroutine type
-make run-chan-t      # Test chan_t channel type
-make run-wg-t        # Test wg_t waitgroup type
-make run-integration # Test integration scenarios
-```
-
-### Available Test Suites
-
-1. **test_co_t.cpp** - Tests for the coroutine type and basic coroutine operations
-2. **test_co_t_join.cpp** - Tests for coroutine join functionality and exception propagation
-3. **test_chan_t.cpp** - Tests for channel operations, buffering, and closing
-4. **test_wg_t.cpp** - Tests for waitgroup synchronization primitives
-5. **test_wg_multiple_waiters.cpp** - Tests for multiple coroutines waiting on the same waitgroup
-6. **test_integration.cpp** - Integration tests combining multiple components
-7. **test_cpp20_caveats.cpp** - Tests demonstrating C++20 coroutine limitations and best practices
-8. **test_advanced_caveats.cpp** - Advanced tests for coroutine behavior and edge cases
-9. **test_scheduler_clear.cpp** - Tests for scheduler queue management
-10. **test_chan_comprehensive.cpp** - Comprehensive channel behavior tests
-
-### Test Commands
-
-```bash
-# Check compiler support
-make check-compiler
-
-# Clean build artifacts
-make clean
-
-# Get help with all available targets
-make help
-```
