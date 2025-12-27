@@ -6,7 +6,7 @@ A simple, stackless, single-threaded, header-only C++20 coroutine library with G
 
 ## Overview
 
-**coco** is a lightweight C++20 coroutine library that brings Go-style concurrency to C++. With just **418 lines of code** in a single header file, it provides:
+**coco** is a lightweight C++20 coroutine library that brings Go-style concurrency to C++.
 
 - 🚀 **Native C++20 coroutines** - Leverages standard C++20 coroutine support
 - 📦 **Header-only** - Just include `coco.h`, no linking required
@@ -15,19 +15,6 @@ A simple, stackless, single-threaded, header-only C++20 coroutine library with G
 - 🎯 **Single-threaded** - No locks, no data races, cooperative multitasking
 - 🔧 **Simple scheduler** - FIFO queue-based coroutine scheduling
 - 🎨 **Clean API** - Intuitive async/await syntax
-
-## Comparison with Other Libraries
-
-| Feature | coco | cppcoro | Boost.Asio | libco |
-|---------|------|---------|------------|-------|
-| C++20 Coroutines | ✅ | ✅ | ✅ | ❌ |
-| Header-only | ✅ | ❌ | ❌ | ❌ |
-| Zero dependencies | ✅ | ❌ | ❌ | ✅ |
-| Lines of code | 418 | ~10K | ~100K | ~1K |
-| Go-like channels | ✅ | ❌ | ❌ | ❌ |
-| Wait groups | ✅ | ❌ | ❌ | ❌ |
-| Single-threaded | ✅ | ❌ | ❌ | ✅ |
-| Stackless | ✅ | ✅ | ✅ | ❌ |
 
 ## Key Features
 
