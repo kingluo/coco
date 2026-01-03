@@ -3,6 +3,7 @@
 A simple, stackless, single-threaded, header-only C++20 coroutine library with Go-like concurrency primitives.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: BSL-1.0](https://img.shields.io/badge/License-BSL--1.0-blue.svg)](https://www.boost.org/LICENSE_1_0.txt)
 
 ## Overview
 
@@ -780,3 +781,14 @@ co_t resource_safe_coroutine() {
        co_return;
    }
    ```
+
+## License
+
+This project is dual-licensed under your choice of:
+
+- **MIT License** - See [LICENSE](LICENSE) file for details
+- **Boost Software License 1.0 (BSL-1.0)** - See [LICENSE](LICENSE) file for details
+
+You may use, distribute, and modify this software under the terms of either license.
+
+**SPDX-License-Identifier:** MIT OR BSL-1.0
